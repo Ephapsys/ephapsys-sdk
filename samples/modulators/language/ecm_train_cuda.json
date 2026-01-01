@@ -1,0 +1,14 @@
+{
+  "dataset_name": "wikitext",
+  "dataset_config": "wikitext-103-raw-v1",
+  "split": "train[:1%]",
+  "timesteps": 100,
+  "ephaptic_factor": 0.7,
+  "lambda_ecm": 0.02,
+  "phi_type": "tanh",
+  "ecm_init_type": "transpose",
+  "lambda_refresh": 250,
+  "rdel_lr": 0.0,
+  "device": "cuda",
+  "seed": 1
+}

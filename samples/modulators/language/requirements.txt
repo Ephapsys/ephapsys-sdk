@@ -1,0 +1,23 @@
+# Core dependencies
+torch==2.2.0
+transformers==4.41.2
+datasets==2.19.1
+evaluate==0.4.6
+huggingface-hub==0.23.0
+hf_transfer==0.1.6
+
+# Metrics and evaluation
+scikit-learn==1.4.1.post1
+tqdm==4.66.2
+matplotlib==3.8.3
+python-docx==1.1.0
+pillow==10.3.0
+seaborn==0.13.2
+
+# Utilities
+numpy==1.26.4
+pandas==2.2.1
+requests==2.31.0
+
+
+
