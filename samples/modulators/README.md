@@ -1,6 +1,4 @@
-# Ephapsys Modulation 
-
-This repository provides reference modulation scripts for different **Model Kinds** supported in Ephapsys.  
+This folder provides reference modulation code (python scripts) for different **Model Kinds** supported in Ephapsys SDK.  
 Each modulation (also referred to as trainer) follows the same structure adapted for the corresponding task and KPIs.
 
 ---

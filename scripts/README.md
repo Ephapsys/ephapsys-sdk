@@ -1,6 +1,4 @@
-# Ephapsys SDK Publishing Scripts
-
-This folder contains helper scripts to build, test, and publish the Ephapsys SDK.
+This folder contains helper shell scripts to build, test, and publish the Ephapsys SDK.
 
 ## Files
 - `publish-sdk.sh`: Build and upload the SDK to TestPyPI or PyPI. Supports:
