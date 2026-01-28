@@ -80,3 +80,6 @@ PERSONALIZE_ANCHOR=none                # or tpm depending on hardware anchors
 - **Contributions:** Open issues/PRs with clear repro steps, expected vs. actual results, and environment (OS, Python, SDK version). Run lint/tests (`python -m pip install -r requirements-dev.txt && pytest`) before submitting.
 - **Support:** For usage help, file a “question” issue or email support@ephapsys.com with logs, SDK version, and API base URL. We aim to respond within 1 business day.
 - **Security:** Report vulnerabilities privately to security@ephapsys.com (optionally PGP). Include affected versions, impact, and minimal reproduction steps. We follow coordinated disclosure and confirm receipt within 24 hours.
+
+## DISCLAIMER
+SUBJECT TO THE EPHAPSYS TERMS OF SERVICE (https://ephapsys.com/terms), THIS SOFTWARE AND DOCUMENTATION ARE PROVIDED “AS IS” WITHOUT WARRANTY OF ANY KIND. USE IS AT YOUR OWN RISK. EPHAPSYS DISCLAIMS ALL IMPLIED WARRANTIES, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL EPHAPSYS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF THIS SOFTWARE OR ITS DOCUMENTATION.
