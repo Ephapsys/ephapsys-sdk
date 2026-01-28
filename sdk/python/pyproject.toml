@@ -1,46 +1,46 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = [
+    "setuptools>=68",
+    "wheel",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ephapsys"
-version = "0.2.5"
+version = "0.2.10"
 description = "Ephapsys helps you  empower and govern AI agents."
 readme = "README.md"
-authors = [{ name = "Ephapsys", email = "hello@ephapsys.com" }]
-license = { text = "Proprietary" }
+authors = [
+    { name = "Ephapsys", email = "hello@ephapsys.com" },
+]
 requires-python = ">=3.8"
-
 dependencies = [
-    "cryptography>=42.0.0",           # PKI, signatures
-    "tpm2-pytss>=2.3.0; sys_platform == 'linux'",  # TPM bindings (Linux-only)
-    "tqdm>=4.66.0",                   # progress bars
-    "requests>=2.31.0",               # HTTP client
-    "numpy>=1.23",                    # numeric ops
-    "torch>=2.0.0",                   # deep learning backend
-    "transformers>=4.33.0",           # Hugging Face models
-    "datasets>=2.14.0,<3.0.0",        # stick to stable <3.0 (no torchcodec default)
-    "evaluate>=0.4.1",                # Hugging Face evaluation framework
-
-    # Language-quality metrics
-    "bert-score>=0.3.13",             # needed for evaluate-metric/bertscore
-    "sacrebleu>=2.3.1",               # needed for evaluate-metric/bleu
-    "rouge-score>=0.1.2",             # needed for evaluate-metric/rouge
-
-    # Audio / speech / text metrics
-    "jiwer>=3.0.3",                   # WER metric (used by evaluate['wer'])
-    "librosa>=0.10.2.post1",          # audio processing (uses importlib.resources)
-    "soundfile>=0.12.1",              # audio I/O (librosa dependency)
-
-    # System + monitoring
-    "psutil>=5.9.0",                  # RAM/VRAM monitoring for progress display
+    "cryptography>=42.0.0",
+    "tpm2-pytss>=2.3.0; sys_platform == 'linux'",
+    "tqdm>=4.66.0",
+    "requests>=2.31.0",
+    "numpy>=1.23",
+    "torch>=2.0.0",
+    "transformers>=4.33.0",
+    "datasets>=2.14.0,<3.0.0",
+    "evaluate>=0.4.1",
+    "bert-score>=0.3.13",
+    "sacrebleu>=2.3.1",
+    "rouge-score>=0.1.2",
+    "jiwer>=3.0.3",
+    "librosa>=0.10.2.post1",
+    "soundfile>=0.12.1",
+    "psutil>=5.9.0",
     "google-cloud-kms>=2.21.0",
 ]
 
+[project.license]
+text = "Proprietary"
+
 [project.optional-dependencies]
-# For developers who *do* have TPM2 stack on macOS or Windows (rare),
-# they can force install with: pip install ephapsys[tpm]
-tpm = ["tpm2-pytss>=2.3.0"]
+tpm = [
+    "tpm2-pytss>=2.3.0",
+]
 
 [project.urls]
 Homepage = "https://ephapsys.com"
