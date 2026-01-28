@@ -1,22 +1,23 @@
-# Ephapsys SDK
+# What is Ephapsys SDK?
 
-Ephapsys SDK helps you deploy trustworthy AI agents enhanced and secured using ephaptic coupling with built-in cryptography at the neural level.
+Ephapsys SDK helps you deploy trustworthy AI agents enhanced and secured using ephaptic coupling with built-in cryptography at the neural level. Simply put, think of it as the built-in performance boost and kill switch for your AI Agents.
 
 With the Ephapsys SDK, you can:
-- Fine-tune and certify your models with the SDK and CLI
-- Manage your AI agent fleet through the Ops Center
+- Cryptographically seal your models to guarantee provenance and integrity during fine-tuning. 
+- Leverage ephaptic coupling during and after fine-tuning to boost your model performance.
+- Deploy, monitor, audit, and instantly override agent behaviors via your Agents Ops Center.
 
 ## Prerequisites
 - Python 3.9+
 - pip 23+ (recommended)
 - Supported OS: Linux (full TPM/TEE flows), macOS (CLI-only mode; TPM-disabled), Windows WSL2 (CLI-only)
 - Optional: `build` + `twine` if you publish wheels; `docker` if you use the samples’ compose files.
+- Registered [Ephapsys](https://ephapsys.com) organization account
 
 ## Installation
 
 Latest release from PyPI:
 ```bash
-python -m pip install --upgrade pip
 pip install ephapsys
 ```
 
