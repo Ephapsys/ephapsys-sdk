@@ -12,7 +12,7 @@ With the Ephapsys SDK, you can:
 - pip 23+ (recommended)
 - Supported OS: Linux (full TPM/TEE flows), macOS (CLI-only mode; TPM-disabled), Windows WSL2 (CLI-only)
 - Optional: `build` + `twine` if you publish wheels; `docker` if you use the samples’ compose files.
-- Registered [Ephapsys](https://ephapsys.com) organization account
+- API key for your registered [Ephapsys](https://ephapsys.com) organization account
 
 ## Installation
 
