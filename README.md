@@ -66,7 +66,7 @@ ephapsys verify --agent-id agent_demo
 ## Configuration
 The SDK/CLI read environment variables or a `.env` file:
 ```
-AOC_API_BASE=https://api.ephapsys.com   # backend base URL
+AOC_API_BASE=https://api.ephapsys.com  # Ops Center base URL
 AOC_API_KEY=YOUR_API_KEY               # org API key
 EPHAPSYS_AGENT_ID=agent_demo           # agent identity for TrustedAgent.from_env
 PERSONALIZE_ANCHOR=none                # or tpm depending on hardware anchors

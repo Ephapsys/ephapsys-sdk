@@ -35,3 +35,4 @@ samples/**/logs/
 samples/**/artifacts/
 samples/**/results/
 dist/
+build/
