@@ -133,7 +133,14 @@ if [ ! -f "$ACTIVE_ENV_FILE" ]; then
 fi
 
 source "$ACTIVE_ENV_FILE"
-export AOC_API_URL AOC_API_KEY AGENT_TEMPLATE_ID PERSONALIZE_ANCHOR
+# Accept either name; SDK resolves AOC_BASE_URL first.
+if [ -z "${AOC_BASE_URL:-}" ] && [ -n "${AOC_API_URL:-}" ]; then
+  AOC_BASE_URL="${AOC_API_URL}"
+fi
+if [ -z "${AOC_API_URL:-}" ] && [ -n "${AOC_BASE_URL:-}" ]; then
+  AOC_API_URL="${AOC_BASE_URL}"
+fi
+export AOC_API_URL AOC_BASE_URL AOC_ORG_ID AOC_BOOTSTRAP_TOKEN AGENT_TEMPLATE_ID PERSONALIZE_ANCHOR
 HSM_KMS_KEY="${HSM_KMS_KEY:-}"
 HSM_KMS_ENDPOINT="${HSM_KMS_ENDPOINT:-}"
 HSM_KMS_CREDENTIALS="${HSM_KMS_CREDENTIALS:-}"
@@ -148,7 +155,7 @@ if [ -z "$ANCHOR_SUFFIX" ]; then
 fi
 INSTANCE_NAME="${INSTANCE_PREFIX}-$(date +%s)-${ANCHOR_SUFFIX}"
 REMOTE_DIR="helloworld"
-REQUIRED_VARS=(AOC_API_URL AOC_API_KEY AGENT_TEMPLATE_ID)
+REQUIRED_VARS=(AOC_API_URL AOC_ORG_ID AOC_BOOTSTRAP_TOKEN AGENT_TEMPLATE_ID)
 for var in "${REQUIRED_VARS[@]}"; do
 if [ -z "${!var:-}" ]; then
   printf "${MAGENTA}❌ %s is missing in %s${RESET}\n" "$var" "$ACTIVE_ENV_FILE"
@@ -409,10 +416,16 @@ TORCH_INSTALL_PLACEHOLDER
 echo -e "${VM_BLUE}[VM] STEP 4/4: Installing Ephapsys SDK + deps (sit tight, this download is hefty)...${VM_RESET}"
 PIP_INSTALL_PLACEHOLDER
 if [ -f .env ]; then
-  echo -e "${VM_BLUE}[VM] Loading .env so TrustedAgent has API credentials${VM_RESET}"
+  echo -e "${VM_BLUE}[VM] Loading .env so TrustedAgent can exchange bootstrap credentials${VM_RESET}"
   set -a
   source .env
-  export AOC_API_URL AOC_API_KEY AGENT_TEMPLATE_ID PERSONALIZE_ANCHOR
+  if [ -z "${AOC_BASE_URL:-}" ] && [ -n "${AOC_API_URL:-}" ]; then
+    AOC_BASE_URL="${AOC_API_URL}"
+  fi
+  if [ -z "${AOC_API_URL:-}" ] && [ -n "${AOC_BASE_URL:-}" ]; then
+    AOC_API_URL="${AOC_BASE_URL}"
+  fi
+  export AOC_API_URL AOC_BASE_URL AOC_ORG_ID AOC_BOOTSTRAP_TOKEN AGENT_TEMPLATE_ID PERSONALIZE_ANCHOR
   set +a
   echo -e "${VM_BLUE}[VM] Personalization anchor=${PERSONALIZE_ANCHOR:-none}${VM_RESET}"
 else

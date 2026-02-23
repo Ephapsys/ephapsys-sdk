@@ -414,9 +414,8 @@ class TrustedAgent:
                 os.getenv("AGENT_TEMPLATE_ID")
             )
         api_base = os.getenv("AOC_BASE_URL") or os.getenv("AOC_API_URL")
-        api_key = os.getenv("AOC_API_KEY") or os.getenv("EPHAPSYS_API_KEY")
         verify = os.getenv("AOC_VERIFY_SSL", "1") != "0"
-        return cls(agent_id, api_base, api_key=api_key, storage_dir=storage, verify_ssl=verify)
+        return cls(agent_id, api_base, api_key=None, storage_dir=storage, verify_ssl=verify)
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}

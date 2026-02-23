@@ -18,14 +18,12 @@ class _Resp:
         return self._payload
 
 
-def test_get_api_key_prefers_legacy(monkeypatch):
-    monkeypatch.setenv("AOC_API_KEY", "legacy-key")
+def test_get_api_key_prefers_explicit(monkeypatch):
     monkeypatch.setenv("AOC_BOOTSTRAP_TOKEN", "boot-token")
-    assert auth.get_api_key(None) == "legacy-key"
+    assert auth.get_api_key("explicit-token") == "explicit-token"
 
 
 def test_get_api_key_exchanges_bootstrap(monkeypatch):
-    monkeypatch.delenv("AOC_API_KEY", raising=False)
     monkeypatch.setenv("AOC_ORG_ID", "org_demo")
     monkeypatch.setenv("AOC_BOOTSTRAP_TOKEN", "boot-token")
     monkeypatch.setenv("AOC_BASE_URL", "http://localhost:7001")
@@ -42,7 +40,6 @@ def test_get_api_key_exchanges_bootstrap(monkeypatch):
 
 
 def test_get_api_key_bootstrap_requires_org(monkeypatch):
-    monkeypatch.delenv("AOC_API_KEY", raising=False)
     monkeypatch.delenv("AOC_ORG_ID", raising=False)
     monkeypatch.setenv("AOC_BOOTSTRAP_TOKEN", "boot-token")
     try:
