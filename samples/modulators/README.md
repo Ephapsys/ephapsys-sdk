@@ -1,6 +1,20 @@
 This folder provides reference modulation code (python scripts) for different **Model Kinds** supported in Ephapsys SDK.  
 Each modulation (also referred to as trainer) follows the same structure adapted for the corresponding task and KPIs.
 
+## Installation profile
+
+For modulation/training scripts:
+
+```bash
+pip install "ephapsys[modulation]"
+```
+
+If you also run full local evaluation/report pipelines (BLEU/ROUGE/BERTScore/etc.), use:
+
+```bash
+pip install "ephapsys[all]"
+```
+
 ---
 
 ## 📑 Trainers Overview
@@ -78,4 +92,3 @@ flowchart TD
 ---
 
 ✅ With this structure, we can easily plug in new Hugging Face models or custom repos, while keeping a uniform workflow across **Language, Vision, Speech, RL, Embeddings, and Audio**.
-

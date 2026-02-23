@@ -7,9 +7,9 @@ It verifies, personalizes (if needed), and runs a language model to output **"He
 > ⚠️ **Important Requirements Before Running**  
 > This demo will not work out of the box unless you first prepare your Ephapsys environment:  
 > 
-> 1. **Ephapsys Account & API Key**  
+> 1. **Ephapsys Account & Credentials**  
 >    - You must have an active Ephapsys account.  
->    - Obtain your API key from the AOC (Agent Operations Center).  
+>    - Preferred: get `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN` from AOC (legacy `AOC_API_KEY` remains compatibility-only).  
 > 
 > 2. **Model Modulation**  
 >    - At least a **Language model** must be modulated in the AOC (for HelloWorld).  Look into **'modulators** folder for an example.
@@ -52,12 +52,16 @@ Complete the checklist below after publishing the new SDK and redeploying the AO
 
 ### Local
 
-1. Copy `.env.example` to `.env` and fill in your `AOC_API_URL`, `AOC_API_KEY`, and `AGENT_TEMPLATE_ID`.
-2. Execute `./run_local.sh` – it sources `.env`, defaults `PERSONALIZE_ANCHOR=tpm`, and launches `helloworld_agent.py`.
+1. Install runtime dependencies:
+   ```bash
+   pip install "ephapsys[modulation]"
+   ```
+2. Copy `.env.example` to `.env` and fill in your `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_BOOTSTRAP_TOKEN`, and `AGENT_TEMPLATE_ID`.
+3. Execute `./run_local.sh` – it sources `.env`, defaults `PERSONALIZE_ANCHOR=tpm`, and launches `helloworld_agent.py`.
 
 ### GCP VM
 
-1. Populate `.env.stag` or `.env.prod` with the appropriate credentials (`AOC_API_URL`, `AOC_API_KEY`, `AGENT_TEMPLATE_ID`)—both set `PERSONALIZE_ANCHOR=tpm` by default.
+1. Populate `.env.stag` or `.env.prod` with the appropriate credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_BOOTSTRAP_TOKEN`, `AGENT_TEMPLATE_ID`)—both set `PERSONALIZE_ANCHOR=tpm` by default.
 2. Run `./run_gcp.sh --staging` or `./run_gcp.sh --production`. The script:
    - Reads the chosen `.env.*` before naming the VM so the hostname reflects the anchor (e.g., `hello-agent-<ts>-tpm`).
    - Creates a Shielded VM with vTPM enabled (required for TPM anchors).

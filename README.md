@@ -12,7 +12,7 @@ With the Ephapsys SDK, you can:
 - pip 23+ (recommended)
 - Supported OS: Linux (full TPM/TEE flows), macOS (CLI-only mode; TPM-disabled), Windows WSL2 (CLI-only)
 - Optional: `build` + `twine` if you publish wheels; `docker` if you use the samples’ compose files.
-- API key for your registered [Ephapsys](https://ephapsys.com) organization account
+- Org bootstrap credentials for your registered [Ephapsys](https://ephapsys.com) organization account
 
 ## Installation
 
@@ -21,9 +21,29 @@ Latest release from PyPI:
 pip install ephapsys
 ```
 
+Optional feature groups:
+```bash
+pip install "ephapsys[modulation]"      # torch/transformers runtime + modulation APIs
+pip install "ephapsys[audio]"           # audio I/O/runtime helpers
+pip install "ephapsys[eval]"            # evaluation toolchain
+pip install "ephapsys[vision]"          # vision/camera stack
+pip install "ephapsys[all]"             # full SDK dependency set
+```
+
+Choose the profile by workload:
+
+| Workload | Install command |
+|---|---|
+| Lightweight orchestrator/proxy only | `pip install ephapsys` |
+| Agent runtime (HelloWorld language) | `pip install "ephapsys[modulation]"` |
+| Agent runtime (Robot multimodal) | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
+| Modulators/training scripts | `pip install "ephapsys[modulation]"` |
+| Modulators with full evaluation/report stack | `pip install "ephapsys[all]"` |
+
 ## Quickstart (Python)
 ```python
-from ephapsys import TrustedAgent, ModulatorClient
+from ephapsys import TrustedAgent
+from ephapsys.modulation import ModulatorClient
 
 agent = TrustedAgent(
     agent_id="agent_demo",
@@ -67,7 +87,9 @@ ephapsys verify --agent-id agent_demo
 The SDK/CLI read environment variables or a `.env` file:
 ```
 AOC_API_BASE=https://api.ephapsys.com  # Ops Center base URL
-AOC_API_KEY=YOUR_API_KEY               # org API key
+AOC_ORG_ID=org_xxxxx                   # org identifier
+AOC_BOOTSTRAP_TOKEN=boot_xxxxx         # bootstrap token (preferred)
+# AOC_API_KEY=YOUR_API_KEY             # deprecated compatibility path
 EPHAPSYS_AGENT_ID=agent_demo           # agent identity for TrustedAgent.from_env
 PERSONALIZE_ANCHOR=none                # or tpm depending on hardware anchors
 ```

@@ -6,9 +6,9 @@ The agent can **hear, see, think, and speak** using offline models after being v
 > ⚠️ **Important Requirements Before Running**  
 > This demo will not work out of the box unless you first prepare your Ephapsys environment:  
 > 
-> 1. **Ephapsys Account & API Key**  
+> 1. **Ephapsys Account & Credentials**  
 >    - You must have an active Ephapsys account.  
->    - Obtain your API key from the AOC (Agent Operations Center).  
+>    - Preferred: get `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN` from AOC (legacy `AOC_API_KEY` remains compatibility-only).  
 > 
 > 2. **Model Modulation**  
 >    - All required models (STT, TTS, Language, Vision, Embedding) must be modulated in the AOC. Look into **'modulators** folder for  examples.
@@ -74,13 +74,15 @@ flowchart TD
 
 ### 1. Install dependencies
 ```bash
-pip install sounddevice opencv-python-headless numpy torch transformers sentence-transformers librosa faiss-cpu webrtcvad
+pip install "ephapsys[modulation,audio,vision,embedding]"
+pip install webrtcvad sounddevice pyaudio
 ```
 
 ### 2. Set environment variables (or create .env file)
 ```bash
 export AOC_API_URL=http://localhost:8000
-export AOC_API_KEY=aoc_xxxxxxxxx
+export AOC_ORG_ID=org_xxxxxxxxx
+export AOC_BOOTSTRAP_TOKEN=bt_xxxxxxxxx
 export AGENT_TEMPLATE_ID=agent_robot
 export PERSONALIZE_ANCHOR=tpm
 ```

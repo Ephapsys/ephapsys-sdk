@@ -7,9 +7,28 @@ Lightweight SDK for **EC-ANN modulation**, **trusted agent provisioning**, and *
 
 ## 📦 Installation
 
-  ```bash
-  pip install -i https://test.pypi.org/simple/ ephapsys
-  ```
+```bash
+pip install ephapsys
+```
+
+Optional feature groups:
+```bash
+pip install "ephapsys[modulation]"
+pip install "ephapsys[audio]"
+pip install "ephapsys[eval]"
+pip install "ephapsys[vision]"      # alias: [video]
+pip install "ephapsys[all]"
+```
+
+Choose the profile by workload:
+
+| Workload | Install command |
+|---|---|
+| Lightweight orchestrator/proxy only | `pip install ephapsys` |
+| Agent runtime (HelloWorld language) | `pip install "ephapsys[modulation]"` |
+| Agent runtime (Robot multimodal) | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
+| Modulators/training scripts | `pip install "ephapsys[modulation]"` |
+| Modulators with full evaluation/report stack | `pip install "ephapsys[all]"` |
 
 ---
 
@@ -51,7 +70,7 @@ For edge production, use hardware anchors (`tpm`, `tee`, `dsim`, `hsm`) and avoi
 Start / iterate / complete modulation on **model templates**:
 
 ```python
-from ephapsys import ModulatorClient
+from ephapsys.modulation import ModulatorClient
 
 mod = ModulatorClient(api_base="http://localhost:7001", api_key="dev")
 resp = mod.start_job(
