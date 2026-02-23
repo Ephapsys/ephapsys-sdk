@@ -36,8 +36,13 @@ print(agent.run("Hello world", model_kind="language"))
 |-----------------------|-----------------------------------------------------|
 | `EPHAPSYS_AGENT_ID`   | Agent ID/label assigned by AOC                      |
 | `AOC_BASE_URL`        | API endpoint, e.g. `http://localhost:8000`          |
-| `AOC_API_KEY`         | API key issued by AOC (Bearer)                      |
+| `AOC_ORG_ID`          | Org identifier (non-secret tenant scope)            |
+| `AOC_BOOTSTRAP_TOKEN` | Bootstrap credential exchanged for short-lived token |
+| `AOC_API_KEY`         | Deprecated compatibility path                        |
 | `EPHAPSYS_STORAGE_DIR`| Optional, defaults to `.ephapsys_state`             |
+
+`AOC_API_KEY` is being deprecated in favor of `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN`.
+For edge production, use hardware anchors (`tpm`, `tee`, `dsim`, `hsm`) and avoid `PERSONALIZE_ANCHOR=none`.
 
 ---
 
@@ -145,4 +150,3 @@ ephapsys mod complete --job-id JOB123 --artifacts '{"weights":"s3://..."}'
 ## 🧪 Samples
 
 Access the samples at: [https://github.com/ephapsys](https://github.com/ephapsys)
-
