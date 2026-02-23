@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ephapsys"
-version = "0.2.11"
+version = "0.2.12"
 description = "Ephapsys helps you empower and govern AI agents."
 readme = "README.md"
 authors = [
@@ -16,22 +16,10 @@ authors = [
 requires-python = ">=3.8"
 dependencies = [
     "cryptography>=42.0.0",
-    "tpm2-pytss>=2.3.0; sys_platform == 'linux'",
     "tqdm>=4.66.0",
     "requests>=2.31.0",
     "numpy>=1.23",
-    "torch>=2.0.0",
-    "transformers>=4.33.0",
-    "datasets>=2.14.0,<3.0.0",
-    "evaluate>=0.4.1",
-    "bert-score>=0.3.13",
-    "sacrebleu>=2.3.1",
-    "rouge-score>=0.1.2",
-    "jiwer>=3.0.3",
-    "librosa>=0.10.2.post1",
-    "soundfile>=0.12.1",
     "psutil>=5.9.0",
-    "google-cloud-kms>=2.21.0",
 ]
 
 [project.license]
@@ -39,7 +27,61 @@ text = "Apache 2.0"
 
 [project.optional-dependencies]
 tpm = [
-    "tpm2-pytss>=2.3.0",
+    "tpm2-pytss>=2.3.0; sys_platform == 'linux'",
+]
+hsm = [
+    "google-cloud-kms>=2.21.0",
+]
+modulation = [
+    "torch>=2.0.0",
+    "transformers>=4.33.0",
+    "datasets>=2.14.0,<3.0.0",
+    "safetensors>=0.4.5",
+]
+audio = [
+    "librosa>=0.10.2.post1",
+    "soundfile>=0.12.1",
+]
+eval = [
+    "evaluate>=0.4.1",
+    "bert-score>=0.3.13",
+    "sacrebleu>=2.3.1",
+    "rouge-score>=0.1.2",
+    "jiwer>=3.0.3",
+]
+vision = [
+    "Pillow>=9.5.0",
+    "opencv-python-headless>=4.8.0",
+]
+video = [
+    "Pillow>=9.5.0",
+    "opencv-python-headless>=4.8.0",
+]
+embedding = [
+    "sentence-transformers>=2.2.2",
+    "faiss-cpu>=1.7.4",
+]
+all = [
+    "google-cloud-kms>=2.21.0",
+    "torch>=2.0.0",
+    "transformers>=4.33.0",
+    "datasets>=2.14.0,<3.0.0",
+    "safetensors>=0.4.5",
+    "librosa>=0.10.2.post1",
+    "soundfile>=0.12.1",
+    "evaluate>=0.4.1",
+    "bert-score>=0.3.13",
+    "sacrebleu>=2.3.1",
+    "rouge-score>=0.1.2",
+    "jiwer>=3.0.3",
+    "Pillow>=9.5.0",
+    "opencv-python-headless>=4.8.0",
+    "sentence-transformers>=2.2.2",
+    "faiss-cpu>=1.7.4",
+    "webrtcvad>=2.0.10",
+    "sounddevice>=0.4.6",
+    "pyaudio>=0.2.14",
+    "tpm2-pytss>=2.3.0; sys_platform == 'linux'",
 ]
 
 [project.urls]
