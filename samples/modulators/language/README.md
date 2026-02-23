@@ -168,13 +168,13 @@ Since `train_language.py` imports `from ephapsys.modulation import ModulatorClie
      ```
    - Then in Dockerfile:  
      ```dockerfile
-     RUN pip install --extra-index-url=https://us-central1-python.pkg.dev/ephapsys-dev/ephapsys-pypi/simple ephapsys
+     RUN pip install --extra-index-url=https://us-central1-python.pkg.dev/ephapsys-dev/ephapsys-pypi/simple "ephapsys[modulation]"
      ```
 
 4. **Install from PyPI (future public release)**  
    - Once the SDK is published publicly:  
      ```dockerfile
-     RUN pip install ephapsys
+     RUN pip install "ephapsys[modulation]"
      ```
 
 ---
