@@ -21,6 +21,7 @@ except PackageNotFoundError:
 from . import TrustedAgent, ModulatorClient
 from .manifest import export_agent_manifest
 from .session import login as sdk_login, auth_headers, API_URL
+from .auth import get_api_key as resolve_api_key
 
 
 # ---------------- Utilities ----------------
@@ -29,10 +30,18 @@ def _env(name: str, default: Optional[str]=None) -> Optional[str]:
 
 # FIXME: BASE URL SHOULD BE HARDCODED AND NOT RETRIEVED AS AN .ENV
 def _get_base_url(args): 
-    return getattr(args, "base_url", None) or _env("AOC_BASE_URL", "http://localhost:7001")
+    return getattr(args, "base_url", None) or _env("AOC_BASE_URL", _env("AOC_API_URL", "http://localhost:7001"))
 
 def _get_api_key(args): 
-    return getattr(args, "api_key", None) or _env("AOC_API_KEY", "dev")
+    explicit = getattr(args, "api_key", None) or _env("AOC_API_KEY")
+    if explicit:
+        return explicit
+    return resolve_api_key(
+        None,
+        base_url=_get_base_url(args),
+        agent_instance_id=getattr(args, "agent_id", None),
+        verify_ssl=_env("AOC_VERIFY_SSL", "1") != "0",
+    )
 
 def print_table(items, headers):
     if not items:
@@ -323,7 +332,7 @@ def build_parser():
         description="Ephapsys CLI – manage agents, models, modulation jobs, and certificates"
     )
     p.add_argument("--base-url", help="AOC base URL (default from AOC_BASE_URL)")
-    p.add_argument("--api-key", help="API key (default from AOC_API_KEY)")
+    p.add_argument("--api-key", help="API key (deprecated compat) or runtime token")
     p.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
 
     sub = p.add_subparsers(dest="cmd", required=True)
