@@ -371,7 +371,12 @@ class TrustedAgent:
         self.agent_id = agent_id
         # self.api_base = api_base.rstrip("/")
         self.api_base = api_base
-        self.api_key = get_api_key(api_key)
+        self.api_key = get_api_key(
+            api_key,
+            base_url=api_base,
+            agent_instance_id=agent_id,
+            verify_ssl=verify_ssl,
+        )
         self.verify_ssl = verify_ssl
         self.storage_dir = pathlib.Path(storage_dir)
         _mkdir(self.storage_dir)
@@ -408,8 +413,8 @@ class TrustedAgent:
             agent_id = (
                 os.getenv("AGENT_TEMPLATE_ID")
             )
-        api_base = os.getenv("AOC_API_URL")
-        api_key = os.getenv("AOC_API_KEY")
+        api_base = os.getenv("AOC_BASE_URL") or os.getenv("AOC_API_URL")
+        api_key = os.getenv("AOC_API_KEY") or os.getenv("EPHAPSYS_API_KEY")
         verify = os.getenv("AOC_VERIFY_SSL", "1") != "0"
         return cls(agent_id, api_base, api_key=api_key, storage_dir=storage, verify_ssl=verify)
 
@@ -3543,7 +3548,12 @@ class SIEManager:
         self.agent_id   = agent_id_or_did
         self.state_dir  = state_dir
         self.verify_ssl = verify_ssl
-        self.api_key    = get_api_key(api_key)
+        self.api_key = get_api_key(
+            api_key,
+            base_url=base_url,
+            agent_instance_id=agent_id_or_did,
+            verify_ssl=verify_ssl,
+        )
         self.privkey_pem     = privkey_pem
         self.privkey_loader  = privkey_loader
         self.tpm_ecdh        = tpm_ecdh
