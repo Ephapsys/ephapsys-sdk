@@ -48,7 +48,6 @@ from ephapsys.modulation import ModulatorClient
 agent = TrustedAgent(
     agent_id="agent_demo",
     api_base="https://api.ephapsys.com",
-    api_key="YOUR_API_KEY",
 )
 
 agent.verify()  # fail-closed checks (certs, digests, leases, host binding)
@@ -88,8 +87,7 @@ The SDK/CLI read environment variables or a `.env` file:
 ```
 AOC_API_BASE=https://api.ephapsys.com  # Ops Center base URL
 AOC_ORG_ID=org_xxxxx                   # org identifier
-AOC_BOOTSTRAP_TOKEN=boot_xxxxx         # bootstrap token (preferred)
-# AOC_API_KEY=YOUR_API_KEY             # deprecated compatibility path
+AOC_BOOTSTRAP_TOKEN=boot_xxxxx         # bootstrap token
 EPHAPSYS_AGENT_ID=agent_demo           # agent identity for TrustedAgent.from_env
 PERSONALIZE_ANCHOR=none                # or tpm depending on hardware anchors
 ```

@@ -76,17 +76,12 @@ def get_api_key(
     verify_ssl: Optional[bool] = None,
 ) -> str:
     """
-    Compatibility resolution order:
+    Resolution order:
       1) Explicit api_key argument
-      2) Legacy AOC_API_KEY / EPHAPSYS_API_KEY
-      3) AOC_BOOTSTRAP_TOKEN exchange -> short-lived device token
+      2) AOC_BOOTSTRAP_TOKEN exchange -> short-lived device token
     """
     if explicit:
         return explicit
-
-    legacy = os.getenv("AOC_API_KEY") or os.getenv("EPHAPSYS_API_KEY")
-    if legacy:
-        return legacy
 
     bootstrap = os.getenv("AOC_BOOTSTRAP_TOKEN")
     if bootstrap:
@@ -123,6 +118,5 @@ def get_api_key(
         )
 
     raise RuntimeError(
-        "Missing credentials. Set AOC_API_KEY (compat) or AOC_ORG_ID + AOC_BOOTSTRAP_TOKEN."
+        "Missing credentials. Set AOC_ORG_ID + AOC_BOOTSTRAP_TOKEN."
     )
-
