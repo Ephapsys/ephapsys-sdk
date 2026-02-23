@@ -11,8 +11,11 @@ publish-sdk.sh [--verbose] --dev|--stag|--prod
   --verbose     Print full command output (otherwise pip installs are quieter).
 
 Set PUBLISH_FORCE=1 to skip the production confirmation prompt.
-Set PUBLISH_VERSION to force a specific version; otherwise we auto-bump the patch
-to avoid collisions with what's already on TestPyPI/PyPI.
+Set PUBLISH_VERSION to force a specific version.
+Default behavior:
+  --stag auto-bumps patch to avoid TestPyPI collisions.
+  --prod uses local pyproject version (typically the staged one) and only bumps if
+         that exact version already exists on PyPI.
 Legacy aliases: --staging (TestPyPI) and --production (PyPI) are still accepted.
 USAGE
 }
@@ -214,6 +217,62 @@ PY
   echo "$target"
 }
 
+resolve_prod_version() {
+  local override="${PUBLISH_VERSION:-}"
+  local current
+  current="$(get_sdk_version)"
+
+  if [[ -n "$override" ]]; then
+    write_sdk_version "$override"
+    echo "$override"
+    return
+  fi
+
+  local remote
+  remote="$(python3 - <<'PY'
+import json, sys
+from urllib.request import urlopen
+
+url = "https://pypi.org/pypi/ephapsys/json"
+try:
+    with urlopen(url, timeout=5) as resp:
+        data = json.load(resp)
+    print(data.get("info", {}).get("version", ""))
+except Exception:
+    print("")
+    sys.exit(0)
+PY
+)"
+
+  # If the local version already exists on PyPI, bump once to avoid collision.
+  if [[ -n "$remote" && "$remote" == "$current" ]]; then
+    local bumped
+    bumped="$(VER="$current" python3 - <<'PY'
+import os, sys
+v = os.environ["VER"]
+parts = v.split(".")
+if not parts:
+    print("0.0.1")
+    sys.exit(0)
+try:
+    nums = [int(p) for p in parts]
+except ValueError:
+    print(v + ".1")
+    sys.exit(0)
+nums[-1] += 1
+print(".".join(str(n) for n in nums))
+PY
+)"
+    warn "Local version ${current} already exists on PyPI; bumping to ${bumped}."
+    write_sdk_version "$bumped"
+    echo "$bumped"
+    return
+  fi
+
+  info "Using local SDK version ${current} for PyPI publish."
+  echo "$current"
+}
+
 ensure_twine_credentials() {
   local section="$1"
   local repo_url="$2"
@@ -365,7 +424,7 @@ case "$MODE" in
       "https://upload.pypi.org/legacy/" \
       "https://pypi.org/account/register/" \
       "https://packaging.python.org/en/latest/guides/publishing-package/"
-    bumped="$(auto_bump_version pypi)"
+    target="$(resolve_prod_version)"
     prepare_dist
     upload_dist ""
     version="$(get_sdk_version)"
