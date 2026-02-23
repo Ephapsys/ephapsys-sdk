@@ -8,7 +8,7 @@ The agent can **hear, see, think, and speak** using offline models after being v
 > 
 > 1. **Ephapsys Account & Credentials**  
 >    - You must have an active Ephapsys account.  
->    - Preferred: get `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN` from AOC (legacy `AOC_API_KEY` remains compatibility-only).  
+>    - Get `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN` from AOC.  
 > 
 > 2. **Model Modulation**  
 >    - All required models (STT, TTS, Language, Vision, Embedding) must be modulated in the AOC. Look into **'modulators** folder for  examples.

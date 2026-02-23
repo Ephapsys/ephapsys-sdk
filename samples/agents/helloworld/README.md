@@ -9,7 +9,7 @@ It verifies, personalizes (if needed), and runs a language model to output **"He
 > 
 > 1. **Ephapsys Account & Credentials**  
 >    - You must have an active Ephapsys account.  
->    - Preferred: get `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN` from AOC (legacy `AOC_API_KEY` remains compatibility-only).  
+>    - Get `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN` from AOC.  
 > 
 > 2. **Model Modulation**  
 >    - At least a **Language model** must be modulated in the AOC (for HelloWorld).  Look into **'modulators** folder for an example.

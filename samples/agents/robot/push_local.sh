@@ -32,11 +32,11 @@ AOC_API="${AOC_API:-${BASE_URL:-http://localhost:7001}}"
 CLI_API="${AOC_API}/cli"
 TOKEN_FILE=".cli_token"
 SESSION_FILE="${HOME}/.ephapsys_state/session.json"
-API_KEY="${API_KEY:-${AOC_API_KEY:-}}"
+API_TOKEN="${API_TOKEN:-${AOC_BOOTSTRAP_TOKEN:-${API_KEY:-}}}"
 HF_TOKEN="${HF_TOKEN:-""}"
 
-if [[ -z "$API_KEY" ]]; then
-  echo "[FATAL] AOC_API_KEY is required to create agent templates. Set it in .env or environment."
+if [[ -z "$API_TOKEN" ]]; then
+  echo "[FATAL] API_TOKEN is required to create agent templates. Set API_TOKEN or AOC_BOOTSTRAP_TOKEN in .env or environment."
   exit 1
 fi
 
@@ -99,7 +99,7 @@ if [[ -z "$TOKEN" ]]; then
   echo "[INFO] Saved session to $SESSION_FILE (reused by ephapsys CLI)"
 fi
 
-AUTH_HEADER=(-H "Authorization: Bearer ${API_KEY}")
+AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
 CLI_HEADER=(-H "Authorization: Bearer ${TOKEN}")
 
 # Fetch templates from CLI endpoint (preferred) or API fallback
@@ -177,12 +177,12 @@ resolve_template() {
 ensure_model_kind() {
   local mid="$1" kind="$2"
   [[ -z "$mid" || -z "$kind" ]] && return
-  doc=$(curl -s -H "Authorization: Bearer ${API_KEY}" "${AOC_API}/models/${mid}" || echo "")
+  doc=$(curl -s -H "Authorization: Bearer ${API_TOKEN}" "${AOC_API}/models/${mid}" || echo "")
   current=$(echo "$doc" | jq -r '.kind // .model_kind // ""')
   if [[ -z "$current" || "$current" == "unknown" || "$current" == "null" ]]; then
     echo "[INFO] Patching model_kind for ${mid} -> ${kind}"
     curl -s -X PATCH "${AOC_API}/models/${mid}" \
-      -H "Authorization: Bearer ${API_KEY}" \
+      -H "Authorization: Bearer ${API_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "{\"model_kind\":\"${kind}\"}" >/dev/null || true
   fi
@@ -252,7 +252,7 @@ run_modulator() {
     fi
     echo "[INFO] Triggering idempotent publish for ${kind} (template=${mid})"
     curl -s -X POST "${AOC_API}/modulation/start" \
-      -H "Authorization: Bearer ${API_KEY}" \
+      -H "Authorization: Bearer ${API_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "{
         \"model_template_id\": \"${mid}\",
@@ -275,7 +275,7 @@ run_modulator() {
   fi
   cat > "${path}/.env" <<EOF
 BASE_URL=${AOC_API}
-API_KEY=${API_KEY:-$TOKEN}
+API_KEY=${API_TOKEN:-$TOKEN}
 MODEL_TEMPLATE_ID=${mid}
 OUTDIR=./artifacts
 EOF
@@ -416,7 +416,7 @@ build_model_entry() {
 
 MODEL_ENTRIES=()
 for mid in "${MODEL_IDS[@]}"; do
-  doc=$(curl -s -H "Authorization: Bearer ${API_KEY}" "${AOC_API}/models/${mid}")
+  doc=$(curl -s -H "Authorization: Bearer ${API_TOKEN}" "${AOC_API}/models/${mid}")
   mkind=$(echo "$doc" | jq -r '.kind // .model_kind // "language"')
   entry=$(build_model_entry "$mid" "$mkind")
   # Attach aux refs to TTS config
@@ -436,7 +436,7 @@ echo "[INFO] Creating agent template via CLI..."
 set +e
 RESP=$(ephapsys \
   --base-url "$AOC_API" \
-  --api-key "$API_KEY" \
+  --api-key "$API_TOKEN" \
   agent create-template \
   --label "$LABEL" \
   --models-file "$tmp_models" 2>&1)
@@ -447,7 +447,7 @@ if [[ $STATUS -ne 0 ]]; then
   echo "$RESP"
   echo "[WARN] CLI create-template failed; falling back to direct API call"
   RESP=$(curl -s -X POST "$AOC_API/agents" \
-    -H "Authorization: Bearer ${API_KEY}" \
+    -H "Authorization: Bearer ${API_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{
       \"label\": \"$LABEL\",

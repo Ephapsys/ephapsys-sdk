@@ -16,7 +16,6 @@ fi
 
 # Config defaults
 BASE_URL=${AOC_BASE_URL:-${AOC_API_URL:-${AOC_API:-"http://localhost:7001"}}}
-API_KEY=${AOC_API_KEY:-""}
 ORG_ID=${AOC_ORG_ID:-""}
 BOOTSTRAP_TOKEN=${AOC_BOOTSTRAP_TOKEN:-""}
 AGENT_ID=${AGENT_TEMPLATE_ID:-"agent_robot"}
@@ -27,8 +26,8 @@ if [ -z "${PERSONALIZE_ANCHOR:-}" ]; then
   export PERSONALIZE_ANCHOR="tpm"
 fi
 
-if [ -z "$API_KEY" ] && { [ -z "$ORG_ID" ] || [ -z "$BOOTSTRAP_TOKEN" ]; }; then
-  echo "[ERROR] Missing credentials. Set AOC_ORG_ID + AOC_BOOTSTRAP_TOKEN (preferred) or legacy AOC_API_KEY."
+if [ -z "$ORG_ID" ] || [ -z "$BOOTSTRAP_TOKEN" ]; then
+  echo "[ERROR] Missing credentials. Set AOC_ORG_ID + AOC_BOOTSTRAP_TOKEN."
   exit 1
 fi
 

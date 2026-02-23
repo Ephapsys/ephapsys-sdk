@@ -33,7 +33,7 @@ def _get_base_url(args):
     return getattr(args, "base_url", None) or _env("AOC_BASE_URL", _env("AOC_API_URL", "http://localhost:7001"))
 
 def _get_api_key(args): 
-    explicit = getattr(args, "api_key", None) or _env("AOC_API_KEY")
+    explicit = getattr(args, "api_key", None)
     if explicit:
         return explicit
     return resolve_api_key(
@@ -332,7 +332,7 @@ def build_parser():
         description="Ephapsys CLI – manage agents, models, modulation jobs, and certificates"
     )
     p.add_argument("--base-url", help="AOC base URL (default from AOC_BASE_URL)")
-    p.add_argument("--api-key", help="API key (deprecated compat) or runtime token")
+    p.add_argument("--api-key", help="Bootstrap/runtime token")
     p.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
 
     sub = p.add_subparsers(dest="cmd", required=True)
