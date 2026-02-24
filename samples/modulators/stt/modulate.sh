@@ -35,26 +35,28 @@ if [ -f ".env" ]; then
 fi
 
 # ---------------- CONFIG ----------------
-BASE_URL=${BASE_URL:-"http://localhost:7001"}       # Backend AOC API
-API_KEY=${API_KEY:-""}                              # API key (must be set in .env or env var)
+BASE_URL=${AOC_BASE_URL:-${BASE_URL:-"http://localhost:7001"}}       # Backend AOC API
+AOC_ORG_ID=${AOC_ORG_ID:-""}
+AOC_MODULATION_TOKEN=${AOC_MODULATION_TOKEN:-""}                              # API key (must be set in .env or env var)
 MODEL_TEMPLATE_ID=${MODEL_TEMPLATE_ID:-""}          # Model Template ID (must be set in .env or env var)
 OUTDIR=${OUTDIR:-"./artifacts"}                 # Output folder
 
-if [ -z "$API_KEY" ] || [ -z "$MODEL_TEMPLATE_ID" ]; then
-  echo "[ERROR] API_KEY and MODEL_TEMPLATE_ID must be set in .env or env vars."
+if [ -z "$AOC_ORG_ID" ] || [ -z "$AOC_MODULATION_TOKEN" ] || [ -z "$MODEL_TEMPLATE_ID" ]; then
+  echo "[ERROR] AOC_ORG_ID, AOC_MODULATION_TOKEN and MODEL_TEMPLATE_ID must be set in .env or env vars."
   exit 1
 fi
 
 # ---------------- RUN ----------------
 echo "[INFO] Starting EphapticSTT Trainer..."
 echo "  BASE_URL:          $BASE_URL"
-echo "  API_KEY:           ${API_KEY:0:8}********"   # mask key for safety
+echo "  AOC_ORG_ID:        $AOC_ORG_ID"
+echo "  AOC_MODULATION_TOKEN:           ${AOC_MODULATION_TOKEN:0:8}********"   # mask key for safety
 echo "  MODEL_TEMPLATE_ID: $MODEL_TEMPLATE_ID"
 echo "  OUTDIR:            $OUTDIR"
 
 python3 train_stt.py \
   --base_url "$BASE_URL" \
-  --api_key "$API_KEY" \
+  --api_key "$AOC_MODULATION_TOKEN" \
   --model_template_id "$MODEL_TEMPLATE_ID" \
   --outdir "$OUTDIR"
 

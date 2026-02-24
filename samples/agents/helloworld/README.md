@@ -9,7 +9,7 @@ It verifies, personalizes (if needed), and runs a language model to output **"He
 > 
 > 1. **Ephapsys Account & Credentials**  
 >    - You must have an active Ephapsys account.  
->    - Get `AOC_ORG_ID` + `AOC_BOOTSTRAP_TOKEN` from AOC.  
+>    - Get `AOC_ORG_ID` + `AOC_PROVISIONING_TOKEN` from AOC.  
 > 
 > 2. **Model Modulation**  
 >    - At least a **Language model** must be modulated in the AOC (for HelloWorld).  Look into **'modulators** folder for an example.
@@ -56,12 +56,12 @@ Complete the checklist below after publishing the new SDK and redeploying the AO
    ```bash
    pip install "ephapsys[modulation]"
    ```
-2. Copy `.env.example` to `.env` and fill in your `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_BOOTSTRAP_TOKEN`, and `AGENT_TEMPLATE_ID`.
+2. Copy `.env.example` to `.env` and fill in your `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
 3. Execute `./run_local.sh` – it sources `.env`, defaults `PERSONALIZE_ANCHOR=tpm`, and launches `helloworld_agent.py`.
 
 ### GCP VM
 
-1. Populate `.env.stag` or `.env.prod` with the appropriate credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_BOOTSTRAP_TOKEN`, `AGENT_TEMPLATE_ID`)—both set `PERSONALIZE_ANCHOR=tpm` by default.
+1. Populate `.env.stag` or `.env.prod` with the appropriate credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, `AGENT_TEMPLATE_ID`)—both set `PERSONALIZE_ANCHOR=tpm` by default.
 2. Run `./run_gcp.sh --staging` or `./run_gcp.sh --production`. The script:
    - Reads the chosen `.env.*` before naming the VM so the hostname reflects the anchor (e.g., `hello-agent-<ts>-tpm`).
    - Creates a Shielded VM with vTPM enabled (required for TPM anchors).

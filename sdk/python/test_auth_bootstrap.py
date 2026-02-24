@@ -19,19 +19,19 @@ class _Resp:
 
 
 def test_get_api_key_prefers_explicit(monkeypatch):
-    monkeypatch.setenv("AOC_BOOTSTRAP_TOKEN", "boot-token")
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-token")
     assert auth.get_api_key("explicit-token") == "explicit-token"
 
 
-def test_get_api_key_exchanges_bootstrap(monkeypatch):
+def test_get_api_key_exchanges_provisioning_token(monkeypatch):
     monkeypatch.setenv("AOC_ORG_ID", "org_demo")
-    monkeypatch.setenv("AOC_BOOTSTRAP_TOKEN", "boot-token")
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-token")
     monkeypatch.setenv("AOC_BASE_URL", "http://localhost:7001")
 
     def _fake_post(url, json, timeout, verify):
         assert url == "http://localhost:7001/auth/device/token"
         assert json["org_id"] == "org_demo"
-        assert json["bootstrap_token"] == "boot-token"
+        assert json["provisioning_token"] == "boot-token"
         return _Resp(200, {"access_token": "jwt-token", "expires_in": 600})
 
     monkeypatch.setattr(auth.requests, "post", _fake_post)
@@ -39,9 +39,9 @@ def test_get_api_key_exchanges_bootstrap(monkeypatch):
     assert token == "jwt-token"
 
 
-def test_get_api_key_bootstrap_requires_org(monkeypatch):
+def test_get_api_key_provisioning_token_requires_org(monkeypatch):
     monkeypatch.delenv("AOC_ORG_ID", raising=False)
-    monkeypatch.setenv("AOC_BOOTSTRAP_TOKEN", "boot-token")
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-token")
     try:
         auth.get_api_key(None, base_url="http://localhost:7001")
         raise AssertionError("expected RuntimeError")

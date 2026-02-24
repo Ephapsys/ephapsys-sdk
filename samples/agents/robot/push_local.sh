@@ -32,11 +32,11 @@ AOC_API="${AOC_API:-${BASE_URL:-http://localhost:7001}}"
 CLI_API="${AOC_API}/cli"
 TOKEN_FILE=".cli_token"
 SESSION_FILE="${HOME}/.ephapsys_state/session.json"
-API_TOKEN="${API_TOKEN:-${AOC_BOOTSTRAP_TOKEN:-${API_KEY:-}}}"
+API_TOKEN="${API_TOKEN:-${AOC_MODULATION_TOKEN:-}}"
 HF_TOKEN="${HF_TOKEN:-""}"
 
 if [[ -z "$API_TOKEN" ]]; then
-  echo "[FATAL] API_TOKEN is required to create agent templates. Set API_TOKEN or AOC_BOOTSTRAP_TOKEN in .env or environment."
+  echo "[FATAL] API_TOKEN is required to create agent templates. Set API_TOKEN or AOC_MODULATION_TOKEN in .env or environment."
   exit 1
 fi
 
@@ -275,7 +275,7 @@ run_modulator() {
   fi
   cat > "${path}/.env" <<EOF
 BASE_URL=${AOC_API}
-API_KEY=${API_TOKEN:-$TOKEN}
+AOC_MODULATION_TOKEN=${API_TOKEN:-$TOKEN}
 MODEL_TEMPLATE_ID=${mid}
 OUTDIR=./artifacts
 EOF

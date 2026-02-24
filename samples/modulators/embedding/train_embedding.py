@@ -41,8 +41,8 @@ RESET = "\033[0m"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base_url", type=str, default=os.getenv("BASE_URL", "http://localhost:7001"))
-    parser.add_argument("--api_key", type=str, default=os.getenv("API_KEY", os.getenv("AOC_BOOTSTRAP_TOKEN", "")))
+    parser.add_argument("--base_url", type=str, default=os.getenv("AOC_BASE_URL", os.getenv("BASE_URL", "http://localhost:7001")))
+    parser.add_argument("--api_key", type=str, default=os.getenv("AOC_MODULATION_TOKEN", ""))
     parser.add_argument("--model_template_id", type=str, required=True)
     parser.add_argument("--outdir", type=str, default="./out")
     parser.add_argument("--auto_start", type=int, default=int(os.getenv("AUTO_START", "1")),
@@ -50,7 +50,7 @@ def main():
     args = parser.parse_args()
 
     if not args.api_key:
-        raise RuntimeError("API token missing. Provide --api_key or set API_KEY/AOC_BOOTSTRAP_TOKEN in the environment")
+        raise RuntimeError("API token missing. Provide --api_key or set AOC_MODULATION_TOKEN in the environment")
 
     os.makedirs(args.outdir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

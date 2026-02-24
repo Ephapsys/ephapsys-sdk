@@ -106,7 +106,7 @@ fi
 
 # === Ensure .env exists ===
 if [ ! -f ".env" ]; then
-  echo "❌ Missing .env (must contain API_KEY, MODEL_TEMPLATE_ID, BASE_URL)"
+  echo "❌ Missing .env (must contain AOC_ORG_ID, AOC_MODULATION_TOKEN, MODEL_TEMPLATE_ID, BASE_URL)"
   exit 1
 fi
 
@@ -119,13 +119,13 @@ else
   echo "⚠️ No HF_TOKEN found in .env; proceeding without authentication."
 fi
 
-if [ -z "${BASE_URL:-}" ] || [ -z "${API_KEY:-}" ] || [ -z "${MODEL_TEMPLATE_ID:-}" ]; then
-  echo "❌ Missing required runtime vars (BASE_URL, API_KEY, MODEL_TEMPLATE_ID)"
+if [ -z "${BASE_URL:-}" ] || [ -z "${AOC_ORG_ID:-}" ] || [ -z "${AOC_MODULATION_TOKEN:-}" ] || [ -z "${MODEL_TEMPLATE_ID:-}" ]; then
+  echo "❌ Missing required runtime vars (BASE_URL, AOC_ORG_ID, AOC_MODULATION_TOKEN, MODEL_TEMPLATE_ID)"
   exit 1
 fi
 
-MASKED="${API_KEY:0:8}********"
-echo "🔐 Env loaded: BASE_URL=$BASE_URL, API_KEY=${MASKED}, MODEL_TEMPLATE_ID=$MODEL_TEMPLATE_ID"
+MASKED="${AOC_MODULATION_TOKEN:0:8}********"
+echo "🔐 Env loaded: BASE_URL=$BASE_URL, AOC_ORG_ID=$AOC_ORG_ID, AOC_MODULATION_TOKEN=${MASKED}, MODEL_TEMPLATE_ID=$MODEL_TEMPLATE_ID"
 
 # ==========================
 # ⚡ GPU + MACHINE SELECTION
@@ -178,7 +178,7 @@ gcloud compute ssh "$INSTANCE_NAME" --zone="$ZONE" -- -t "
       -v $REMOTE_DIR/artifacts:/app/artifacts \
       $IMAGE_REF \
       --base_url $BASE_URL \
-      --api_key $API_KEY \
+      --api_key $AOC_MODULATION_TOKEN \
       --model_template_id $MODEL_TEMPLATE_ID \
       --outdir artifacts 2>&1 | tee -a \$LOG_FILE
       --train_mode
