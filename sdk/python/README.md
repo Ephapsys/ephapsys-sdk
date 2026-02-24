@@ -56,7 +56,7 @@ print(agent.run("Hello world", model_kind="language"))
 | `EPHAPSYS_AGENT_ID`   | Agent ID/label assigned by AOC                      |
 | `AOC_BASE_URL`        | API endpoint, e.g. `http://localhost:8000`          |
 | `AOC_ORG_ID`          | Org identifier (non-secret tenant scope)            |
-| `AOC_BOOTSTRAP_TOKEN` | Bootstrap credential exchanged for short-lived token |
+| `AOC_PROVISIONING_TOKEN` | Provisioning credential exchanged for short-lived device token |
 | `EPHAPSYS_STORAGE_DIR`| Optional, defaults to `.ephapsys_state`             |
 
 For edge production, use hardware anchors (`tpm`, `tee`, `dsim`, `hsm`) and avoid `PERSONALIZE_ANCHOR=none`.

@@ -12,7 +12,7 @@ With the Ephapsys SDK, you can:
 - pip 23+ (recommended)
 - Supported OS: Linux (full TPM/TEE flows), macOS (CLI-only mode; TPM-disabled), Windows WSL2 (CLI-only)
 - Optional: `build` + `twine` if you publish wheels; `docker` if you use the samples’ compose files.
-- Org bootstrap credentials for your registered [Ephapsys](https://ephapsys.com) organization account
+- Org provisioning credentials for your registered [Ephapsys](https://ephapsys.com) organization account
 
 ## Installation
 
@@ -87,7 +87,7 @@ The SDK/CLI read environment variables or a `.env` file:
 ```
 AOC_API_BASE=https://api.ephapsys.com  # Ops Center base URL
 AOC_ORG_ID=org_xxxxx                   # org identifier
-AOC_BOOTSTRAP_TOKEN=boot_xxxxx         # bootstrap token
+AOC_PROVISIONING_TOKEN=boot_xxxxx         # provisioning token
 EPHAPSYS_AGENT_ID=agent_demo           # agent identity for TrustedAgent.from_env
 PERSONALIZE_ANCHOR=none                # or tpm depending on hardware anchors
 ```
