@@ -23,6 +23,14 @@ class ModulatorClient:
         # Map job_id → model_template_id so helper calls can enrich payloads automatically
         self._job_models: Dict[str, str] = {}
 
+    @classmethod
+    def from_env(cls):
+        base_url = os.getenv("AOC_BASE_URL") or os.getenv("AOC_API_URL") or "http://localhost:7001"
+        api_key = os.getenv("AOC_MODULATION_TOKEN", "")
+        mtls_cert = os.getenv("AOC_MTLS_CERT")
+        mtls_key = os.getenv("AOC_MTLS_KEY")
+        return cls(base_url=base_url, api_key=api_key, mtls_cert=mtls_cert, mtls_key=mtls_key)
+
     # ------------------ Internal helpers ------------------
     def _auth(self) -> Dict[str, str]:
         if self.api_key:
