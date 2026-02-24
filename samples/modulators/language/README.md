@@ -80,7 +80,7 @@ This file contains **GCP infrastructure settings** (project, region, zone).
 This file contains **modulator runtime values** (passed into the container).  
 
 ```ini
-API_KEY=your_api_key_here
+AOC_MODULATION_TOKEN=your_api_key_here
 MODEL_TEMPLATE_ID=your_model_template_id_here
 BASE_URL=http://localhost:7001   # or your AOC backend
 ```

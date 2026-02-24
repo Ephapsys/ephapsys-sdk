@@ -7,7 +7,7 @@ set -euo pipefail
 #   ./modulate_gcp.sh t4 --no-build
 #   ./modulate_gcp.sh t4 --no-push
 #
-# Requires: Docker, gcloud, .env with API_KEY + MODEL_TEMPLATE_ID + BASE_URL
+# Requires: Docker, gcloud, .env with AOC_ORG_ID + AOC_MODULATION_TOKEN + MODEL_TEMPLATE_ID + BASE_URL
 # Infra config should be in gcp.env (not committed), copied from gcp.env.example
 
 # === Load infra config if available ===
@@ -43,7 +43,7 @@ fi
 
 # === Ensure .env exists ===
 if [ ! -f ".env" ]; then
-  echo "❌ Missing .env (must contain API_KEY, MODEL_TEMPLATE_ID, BASE_URL)"; exit 1
+  echo "❌ Missing .env (must contain AOC_ORG_ID, AOC_MODULATION_TOKEN, MODEL_TEMPLATE_ID, BASE_URL)"; exit 1
 fi
 
 # === Source runtime envs from .env ===
@@ -61,16 +61,19 @@ fi
 if [ -z "${BASE_URL:-}" ]; then
   echo "❌ BASE_URL missing in .env"; exit 1
 fi
-if [ -z "${API_KEY:-}" ]; then
-  echo "❌ API_KEY missing in .env"; exit 1
+if [ -z "${AOC_ORG_ID:-}" ]; then
+  echo "❌ AOC_ORG_ID missing in .env"; exit 1
+fi
+if [ -z "${AOC_MODULATION_TOKEN:-}" ]; then
+  echo "❌ AOC_MODULATION_TOKEN missing in .env"; exit 1
 fi
 if [ -z "${MODEL_TEMPLATE_ID:-}" ]; then
   echo "❌ MODEL_TEMPLATE_ID missing in .env"; exit 1
 fi
 
 # === Masked .env echo ===
-MASKED="${API_KEY:0:8}********"
-echo "🔐 Env loaded: BASE_URL=$BASE_URL, API_KEY=${MASKED}, MODEL_TEMPLATE_ID=$MODEL_TEMPLATE_ID"
+MASKED="${AOC_MODULATION_TOKEN:0:8}********"
+echo "🔐 Env loaded: BASE_URL=$BASE_URL, AOC_ORG_ID=$AOC_ORG_ID, AOC_MODULATION_TOKEN=${MASKED}, MODEL_TEMPLATE_ID=$MODEL_TEMPLATE_ID"
 
 # ==========================
 # ⚡ GPU + MACHINE SELECTION

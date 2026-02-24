@@ -18,7 +18,7 @@ fi
 # Config defaults
 BASE_URL=${AOC_API_URL:-""}
 ORG_ID=${AOC_ORG_ID:-""}
-BOOTSTRAP_TOKEN=${AOC_BOOTSTRAP_TOKEN:-""}
+BOOTSTRAP_TOKEN=${AOC_PROVISIONING_TOKEN:-""}
 AGENT_ID=${AGENT_TEMPLATE_ID:-"agent_helloworld"}
 
 # Handle anchor properly
@@ -28,7 +28,7 @@ if [ -z "${PERSONALIZE_ANCHOR:-}" ]; then
 fi
 
 if [ -z "$ORG_ID" ] || [ -z "$BOOTSTRAP_TOKEN" ]; then
-  echo "[ERROR] Missing credentials. Set AOC_ORG_ID + AOC_BOOTSTRAP_TOKEN."
+  echo "[ERROR] Missing credentials. Set AOC_ORG_ID + AOC_PROVISIONING_TOKEN."
   exit 1
 fi
 

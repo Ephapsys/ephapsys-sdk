@@ -12,11 +12,11 @@ def _truthy(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "")
 
 
-def _exchange_bootstrap_token(
+def _exchange_provisioning_token(
     *,
     base_url: str,
     org_id: str,
-    bootstrap_token: str,
+    provisioning_token: str,
     device_id: Optional[str] = None,
     agent_instance_id: Optional[str] = None,
     verify_ssl: bool = True,
@@ -24,7 +24,7 @@ def _exchange_bootstrap_token(
     key = (
         base_url.rstrip("/"),
         org_id,
-        bootstrap_token,
+        provisioning_token,
         device_id or "",
         agent_instance_id or "",
     )
@@ -36,14 +36,14 @@ def _exchange_bootstrap_token(
     url = f"{base_url.rstrip('/')}/auth/device/token"
     body = {
         "org_id": org_id,
-        "bootstrap_token": bootstrap_token,
+        "provisioning_token": provisioning_token,
         "device_id": device_id,
         "agent_instance_id": agent_instance_id,
     }
     try:
         resp = requests.post(url, json=body, timeout=15, verify=verify_ssl)
     except requests.RequestException as e:
-        raise RuntimeError(f"Failed to exchange bootstrap token at {url}: {e}") from e
+        raise RuntimeError(f"Failed to exchange provisioning token at {url}: {e}") from e
 
     if resp.status_code != 200:
         detail = ""
@@ -52,14 +52,14 @@ def _exchange_bootstrap_token(
         except Exception:
             pass
         raise RuntimeError(
-            f"Bootstrap token exchange failed ({resp.status_code})"
+            f"Provisioning token exchange failed ({resp.status_code})"
             + (f": {detail}" if detail else "")
         )
 
     data = resp.json()
     token = data.get("access_token")
     if not token:
-        raise RuntimeError("Bootstrap token exchange succeeded but access_token missing")
+        raise RuntimeError("Provisioning token exchange succeeded but access_token missing")
 
     ttl = int(data.get("expires_in") or 900)
     _TOKEN_CACHE[key] = (token, now + max(30, ttl))
@@ -78,16 +78,16 @@ def get_api_key(
     """
     Resolution order:
       1) Explicit api_key argument
-      2) AOC_BOOTSTRAP_TOKEN exchange -> short-lived device token
+      2) AOC_PROVISIONING_TOKEN exchange -> short-lived device token
     """
     if explicit:
         return explicit
 
-    bootstrap = os.getenv("AOC_BOOTSTRAP_TOKEN")
-    if bootstrap:
+    provisioning_token = os.getenv("AOC_PROVISIONING_TOKEN")
+    if provisioning_token:
         resolved_org = org_id or os.getenv("AOC_ORG_ID")
         if not resolved_org:
-            raise RuntimeError("Missing AOC_ORG_ID for bootstrap token exchange")
+            raise RuntimeError("Missing AOC_ORG_ID for provisioning token exchange")
 
         resolved_base = (
             base_url
@@ -108,15 +108,15 @@ def get_api_key(
             or ""
         )
         resolved_verify = _truthy("AOC_VERIFY_SSL", "1") if verify_ssl is None else bool(verify_ssl)
-        return _exchange_bootstrap_token(
+        return _exchange_provisioning_token(
             base_url=resolved_base,
             org_id=resolved_org,
-            bootstrap_token=bootstrap,
+            provisioning_token=provisioning_token,
             device_id=resolved_device,
             agent_instance_id=resolved_instance,
             verify_ssl=resolved_verify,
         )
 
     raise RuntimeError(
-        "Missing credentials. Set AOC_ORG_ID + AOC_BOOTSTRAP_TOKEN."
+        "Missing credentials. Set AOC_ORG_ID + AOC_PROVISIONING_TOKEN."
     )

@@ -9,11 +9,15 @@ from ephapsys.ecm import inject_ecm
 class ModulatorClient:
     """AOC-driven modulation on **Model Templates** with integrated evaluation & artifact handling."""
 
-    def __init__(self, base_url: str, api_key: str,
+    def __init__(self, base_url: str, api_key: Optional[str] = None,
                  mtls_cert: Optional[str] = None, mtls_key: Optional[str] = None):
         # Trainers must always talk to UI API, not /cli
         self.base_url = base_url.rstrip('/')
-        self.api_key = api_key
+        self.api_key = api_key or os.getenv("AOC_MODULATION_TOKEN", "")
+        if not self.api_key:
+            raise RuntimeError(
+                "Missing modulation token. Provide api_key or set AOC_MODULATION_TOKEN."
+            )
         self.mtls_cert = mtls_cert
         self.mtls_key = mtls_key
         # Map job_id → model_template_id so helper calls can enrich payloads automatically
