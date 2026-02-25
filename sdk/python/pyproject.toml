@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ephapsys"
-version = "0.2.18"
+version = "0.2.19"
 description = "Ephapsys helps you empower and govern AI agents."
 readme = "README.md"
 authors = [
