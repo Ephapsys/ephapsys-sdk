@@ -43,7 +43,14 @@ def request(method: str, base_url: str, path: str, headers=None, params=None, js
                     return r.text
             return None
         except Exception as e:
-            raise RuntimeError(f"HTTP error: {e}")
+            body = ""
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    body = resp.text or ""
+                except Exception:
+                    body = ""
+            raise RuntimeError(f"HTTP error: {e}" + (f"\nResponse body: {body}" if body else ""))
     # urllib fallback
     data_bytes = None
     if json_body is not None:
@@ -67,7 +74,14 @@ def request(method: str, base_url: str, path: str, headers=None, params=None, js
             except Exception:
                 return content.decode("utf-8", "ignore")
     except HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code}: {e.reason}")
+        body = ""
+        try:
+            if e.fp is not None:
+                body_bytes = e.fp.read()
+                body = body_bytes.decode("utf-8", "ignore") if body_bytes else ""
+        except Exception:
+            body = ""
+        raise RuntimeError(f"HTTP {e.code}: {e.reason}" + (f"\nResponse body: {body}" if body else ""))
     except URLError as e:
         raise RuntimeError(f"HTTP error: {e.reason}")
 
