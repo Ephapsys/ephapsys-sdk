@@ -100,6 +100,15 @@ EPHAPSYS_AGENT_ID=agent_demo           # agent identity for TrustedAgent.from_en
 PERSONALIZE_ANCHOR=none                # or tpm depending on hardware anchors
 ```
 
+Optional runtime download tuning:
+```bash
+AOC_DOWNLOAD_PROGRESS=1
+AOC_DOWNLOAD_RETRIES=3
+AOC_DOWNLOAD_TIMEOUT=60
+AOC_DOWNLOAD_CHUNK_KB=256
+AOC_DOWNLOAD_PROGRESS_STEP_MB=5
+```
+
 ## Samples
 - See `samples/agents/helloworld` for a minimal chatbot agent.
 - See `samples/agents/robot` for a full multi-modal reference agent.
