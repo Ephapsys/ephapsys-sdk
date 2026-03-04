@@ -813,7 +813,13 @@ class ModulatorClient:
 
             doc.save(os.path.join(run_dir, "report.docx"))
         except Exception as e:
-            print(f"[WARN] Failed to build DOCX report: {e}")
+            if "No module named 'docx'" in str(e):
+                print(
+                    "[INFO] DOCX report skipped (python-docx not installed). "
+                    "Install with: pip install 'ephapsys[eval]' or pip install python-docx"
+                )
+            else:
+                print(f"[WARN] Failed to build DOCX report: {e}")
         
 
         # === Save model & upload artifacts ===
