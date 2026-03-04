@@ -109,6 +109,51 @@ print(resp)
 
 ---
 
+## 🔗 A2AClient (Agent-to-Agent)
+
+Send, list, and ack org-scoped A2A messages:
+
+```python
+from ephapsys import A2AClient
+
+a2a = A2AClient.from_env()
+
+sent = a2a.send_message(
+    from_agent_id="agent_sender",
+    to_agent_id="agent_receiver",
+    payload={"op": "ping"},
+    message_type="event",
+)
+
+inbox = a2a.inbox(agent_id="agent_receiver", limit=20)
+first = (inbox.get("items") or [None])[0]
+if first:
+    a2a.ack_message(message_id=first["id"], agent_id="agent_receiver")
+```
+
+`A2AClient.from_env()` uses `AOC_A2A_TOKEN` (and falls back to `AOC_MODULATION_TOKEN` for compatibility).
+
+Optional signed mode (recommended for production):
+
+```bash
+export AOC_A2A_TOKEN=a2a_xxx
+export AOC_ORG_ID=org_xxx
+export A2A_SIGN_REQUESTS=1
+export A2A_HMAC_SECRET=replace_with_org_secret
+```
+
+When `A2A_SIGN_REQUESTS=1`, `A2AClient.send_message()` adds:
+- `x-a2a-ts`
+- `x-a2a-nonce`
+- `x-a2a-sig`
+
+Backend verification controls:
+- `A2A_REQUIRE_SIGNATURE=1`
+- `A2A_HMAC_SECRET`
+- `A2A_REPLAY_WINDOW_SECONDS` (default `300`)
+
+---
+
 ## 🖥️ CLI
 
 The SDK includes a CLI (`ephapsys`) for working with agents, models, modulation, and certificates.  
