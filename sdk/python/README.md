@@ -69,6 +69,15 @@ print(agent.run("Hello world", model_kind="language"))
 
 For edge production, use hardware anchors (`tpm`, `tee`, `dsim`, `hsm`) and avoid `PERSONALIZE_ANCHOR=none`.
 
+Runtime download tuning (optional):
+```bash
+AOC_DOWNLOAD_PROGRESS=1
+AOC_DOWNLOAD_RETRIES=3
+AOC_DOWNLOAD_TIMEOUT=60
+AOC_DOWNLOAD_CHUNK_KB=256
+AOC_DOWNLOAD_PROGRESS_STEP_MB=5
+```
+
 ---
 
 ## 🎛️ ModulatorClient
