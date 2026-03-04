@@ -2409,6 +2409,9 @@ class TrustedAgent:
             local_paths["model_id"] = entry.get("id") or mid
             local_paths["_ecm_cache_name"] = f"{mid}.ecm"
             local_paths["_adapt_state"] = self._load_adapt_state(kind)
+            gguf_path = self._find_gguf_path(local_paths)
+            if gguf_path:
+                local_paths["gguf_path"] = gguf_path
             runtimes[kind] = local_paths
 
             logger.debug("[SDK] ✅ Prepared %s model %s with %d artifacts", kind, mid, len(local_paths))
@@ -2721,6 +2724,77 @@ class TrustedAgent:
 
         return None
 
+    def _find_gguf_path(self, runtime: Dict[str, Any]) -> Optional[str]:
+        explicit = runtime.get("gguf_path")
+        if isinstance(explicit, str) and explicit and os.path.exists(explicit):
+            return explicit
+
+        model_path = runtime.get("model_path")
+        if not model_path:
+            return None
+        path = pathlib.Path(model_path)
+
+        # Prefer canonical single-model filename when present.
+        preferred = path / "model.gguf"
+        if preferred.exists():
+            return str(preferred)
+
+        candidates = sorted(path.glob("*.gguf"))
+        if candidates:
+            return str(candidates[0])
+        return None
+
+    def _run_language_gguf(self, runtime: Dict[str, Any], prompt: str) -> tuple[str, int]:
+        gguf_path = self._find_gguf_path(runtime)
+        if not gguf_path:
+            raise RuntimeError("GGUF runtime selected but no .gguf artifact was found")
+
+        # Prefer Python binding if installed.
+        try:
+            from llama_cpp import Llama  # type: ignore
+
+            n_ctx = int((runtime.get("config") or {}).get("n_ctx", os.getenv("AOC_GGUF_CTX", "2048")))
+            max_tokens = int((runtime.get("config") or {}).get("max_new_tokens", os.getenv("AOC_GGUF_MAX_NEW_TOKENS", "256")))
+            llm = Llama(model_path=gguf_path, n_ctx=n_ctx, verbose=False)
+            out = llm(
+                str(prompt),
+                max_tokens=max_tokens,
+                temperature=float((runtime.get("config") or {}).get("temperature", 0.7)),
+            )
+            text = ((out or {}).get("choices") or [{}])[0].get("text", "") if isinstance(out, dict) else ""
+            token_count = int(((out or {}).get("usage") or {}).get("completion_tokens") or 0) if isinstance(out, dict) else 0
+            return text.strip(), token_count
+        except ImportError:
+            pass
+        except Exception as exc:
+            raise RuntimeError(f"llama_cpp Python runtime failed: {exc}") from exc
+
+        # Fallback to llama.cpp CLI.
+        cli = os.getenv("AOC_LLAMA_CPP_CLI", "llama-cli")
+        if shutil.which(cli) is None:
+            raise RuntimeError(
+                "GGUF runtime requires llama.cpp. Install `llama-cpp-python` or make "
+                "`llama-cli` available (override with AOC_LLAMA_CPP_CLI)."
+            )
+        max_tokens = int((runtime.get("config") or {}).get("max_new_tokens", os.getenv("AOC_GGUF_MAX_NEW_TOKENS", "256")))
+        n_ctx = int((runtime.get("config") or {}).get("n_ctx", os.getenv("AOC_GGUF_CTX", "2048")))
+        cmd = [
+            cli,
+            "-m", gguf_path,
+            "-p", str(prompt),
+            "-n", str(max_tokens),
+            "-c", str(n_ctx),
+            "--no-display-prompt",
+        ]
+        try:
+            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            text = (proc.stdout or "").strip()
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            raise RuntimeError(f"llama.cpp CLI failed: {detail or exc}") from exc
+        token_count = max(0, len(text.split()))
+        return text, token_count
+
     def _apply_ecm_if_available(self, model: Any, runtime: Dict[str, Any], install_only: bool = False) -> None:
         kind = runtime.get("kind") or "unknown"
         eph_cfg = runtime.get("ephaptic") or {}
@@ -2956,6 +3030,18 @@ class TrustedAgent:
         if not enforced_input:
             logger.warning("⚠️ Input blocked by policies: %s", in_policies)
             return "[BLOCKED BY POLICIES]", 0
+
+        gguf_path = self._find_gguf_path(runtime)
+        if gguf_path:
+            decoded, token_count = self._run_language_gguf(runtime, str(enforced_input))
+            enforced_output, out_policies = self.enforce_policies_model_kind(decoded, "language", "output")
+            if not enforced_output:
+                logger.warning("⚠️ Output blocked by policies: %s", out_policies)
+                return "[BLOCKED BY POLICIES]", token_count
+            guard_output, _ = self._apply_guardrails_with_logging(runtime, enforced_output, "language")
+            if guard_output is None:
+                return "[BLOCKED BY GUARDRAILS]", token_count
+            return guard_output, token_count
 
         try:
             from transformers import (
