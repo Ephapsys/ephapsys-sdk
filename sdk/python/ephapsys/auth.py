@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Dict
 
 import requests
 
-_TOKEN_CACHE: Dict[Tuple[str, str, str, str, str], Tuple[str, float]] = {}
+_TOKEN_CACHE: Dict[Tuple[str, str, str, str], Tuple[str, float]] = {}
 
 
 def _truthy(name: str, default: str = "1") -> bool:
@@ -26,7 +26,6 @@ def _exchange_provisioning_token(
         org_id,
         provisioning_token,
         device_id or "",
-        agent_instance_id or "",
     )
     now = time.time()
     cached = _TOKEN_CACHE.get(key)

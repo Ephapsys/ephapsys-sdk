@@ -47,3 +47,22 @@ def test_get_api_key_provisioning_token_requires_org(monkeypatch):
         raise AssertionError("expected RuntimeError")
     except RuntimeError as exc:
         assert "AOC_ORG_ID" in str(exc)
+
+
+def test_get_api_key_cache_not_split_by_agent_instance(monkeypatch):
+    monkeypatch.setenv("AOC_ORG_ID", "org_demo")
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-token")
+    monkeypatch.setenv("AOC_BASE_URL", "http://localhost:7001")
+    auth._TOKEN_CACHE.clear()
+    calls = {"count": 0}
+
+    def _fake_post(url, json, timeout, verify):
+        calls["count"] += 1
+        return _Resp(200, {"access_token": "jwt-token", "expires_in": 600})
+
+    monkeypatch.setattr(auth.requests, "post", _fake_post)
+    t1 = auth.get_api_key(None, base_url="http://localhost:7001", agent_instance_id="agent_temp_1")
+    t2 = auth.get_api_key(None, base_url="http://localhost:7001", agent_instance_id="did:ephapsys:abc")
+    assert t1 == "jwt-token"
+    assert t2 == "jwt-token"
+    assert calls["count"] == 1
