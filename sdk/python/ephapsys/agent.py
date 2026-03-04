@@ -1915,6 +1915,84 @@ class TrustedAgent:
             return m.group(1)
         return candidate
 
+    def _download_http_with_retry(self, src: str, dst: pathlib.Path) -> str:
+        import urllib.request
+
+        retries = max(1, int(os.getenv("AOC_DOWNLOAD_RETRIES", "3")))
+        timeout_s = float(os.getenv("AOC_DOWNLOAD_TIMEOUT", "60"))
+        chunk_size = max(8 * 1024, int(os.getenv("AOC_DOWNLOAD_CHUNK_KB", "256")) * 1024)
+        progress_enabled = os.getenv("AOC_DOWNLOAD_PROGRESS", "1") != "0"
+        progress_step_bytes = max(
+            256 * 1024,
+            int(float(os.getenv("AOC_DOWNLOAD_PROGRESS_STEP_MB", "5")) * 1024 * 1024),
+        )
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, retries + 1):
+            started = time.time()
+            tmp = dst.with_suffix(dst.suffix + ".part")
+            downloaded = 0
+            next_progress = progress_step_bytes
+            try:
+                req = urllib.request.Request(src, headers={"User-Agent": "ephapsys-sdk/1.0"})
+                with urllib.request.urlopen(req, timeout=timeout_s) as resp, open(tmp, "wb") as f:
+                    cl = resp.headers.get("Content-Length")
+                    total = int(cl) if cl and cl.isdigit() else 0
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_enabled and downloaded >= next_progress:
+                            elapsed = max(0.001, time.time() - started)
+                            mbps = (downloaded / (1024 * 1024)) / elapsed
+                            if total > 0:
+                                pct = (downloaded * 100.0) / total
+                                print(
+                                    f"[SDK][Download] {dst.name}: {pct:.1f}% "
+                                    f"({downloaded}/{total} bytes, {mbps:.2f} MiB/s)"
+                                )
+                            else:
+                                print(
+                                    f"[SDK][Download] {dst.name}: {downloaded} bytes "
+                                    f"({mbps:.2f} MiB/s)"
+                                )
+                            next_progress += progress_step_bytes
+
+                os.replace(tmp, dst)
+                elapsed = max(0.001, time.time() - started)
+                mbps = (downloaded / (1024 * 1024)) / elapsed
+                logger.info(
+                    "[SDK][Download] Completed %s (%.2f MiB in %.2fs, %.2f MiB/s)",
+                    dst.name,
+                    downloaded / (1024 * 1024),
+                    elapsed,
+                    mbps,
+                )
+                return str(dst)
+            except Exception as exc:
+                last_exc = exc
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except Exception:
+                    pass
+                if attempt >= retries:
+                    break
+                backoff = min(5.0, 0.5 * (2 ** (attempt - 1)))
+                logger.warning(
+                    "[SDK][Download] Retry %d/%d for %s after error: %s (sleep %.1fs)",
+                    attempt,
+                    retries,
+                    src,
+                    exc,
+                    backoff,
+                )
+                time.sleep(backoff)
+
+        raise RuntimeError(f"Download failed for {src}: {last_exc}") from last_exc
+
     def _download(self, src: str, dst: pathlib.Path) -> str:
         """
         Download or copy an artifact to the local cache.
@@ -1925,9 +2003,7 @@ class TrustedAgent:
 
         _mkdir(dst.parent)
         if _is_http(src):
-            import urllib.request
-            with urllib.request.urlopen(src) as r, open(dst, "wb") as f:
-                shutil.copyfileobj(r, f)
+            return self._download_http_with_retry(src, dst)
         else:
             if not os.path.exists(src):
                 raise RuntimeError(f"Artifact source not found: {src}")
@@ -2199,6 +2275,7 @@ class TrustedAgent:
         runtimes: Dict[str, Dict[str, Any]] = {}
 
         for entry in manifest["models"]:
+            model_start = time.time()
             mid = entry.get("id") or "model0"
             kind = entry.get("kind") or "unknown"
 
@@ -2221,6 +2298,8 @@ class TrustedAgent:
                 if not dst.exists():
                     logger.debug("[SDK] Downloading %s:%s → %s", mid, name, dst)
                     self._download(url, dst)
+                else:
+                    logger.debug("[SDK] Cache hit %s:%s → %s", mid, name, dst)
                 if sha:
                     calc = sha256_file(str(dst))
                     if calc.lower() != sha.lower():
@@ -2287,6 +2366,12 @@ class TrustedAgent:
             runtimes[kind] = local_paths
 
             logger.debug("[SDK] ✅ Prepared %s model %s with %d artifacts", kind, mid, len(local_paths))
+            logger.info(
+                "[SDK] Prepared runtime for kind=%s model=%s in %.2fs",
+                kind,
+                mid,
+                time.time() - model_start,
+            )
 
         # Wire aux dependencies into TTS runtime if present
         if "tts" in runtimes:
