@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+MODE="${1:-run}" # run | smoke
+
 # --- Load environment from .env if present ---
 if [ -f ".env" ]; then
   echo "[INFO] Loading environment from .env"
@@ -24,6 +26,14 @@ TRAIN_MODE=${TRAIN_MODE:-"1"}   # ✅ Default = 1 (training enabled)
 if [ -z "$AOC_ORG_ID" ] || [ -z "$AOC_MODULATION_TOKEN" ] || [ -z "$MODEL_TEMPLATE_ID" ]; then
   echo "[ERROR] AOC_ORG_ID, AOC_MODULATION_TOKEN and MODEL_TEMPLATE_ID must be set."
   exit 1
+fi
+
+if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
+  echo "[CI][smoke] Language modulator env validation OK."
+  echo "[CI][smoke] BASE_URL=$BASE_URL TEMPLATE=$MODEL_TEMPLATE_ID"
+  python3 -m py_compile train_language.py
+  echo "[CI][smoke] train_language.py syntax OK."
+  exit 0
 fi
 
 echo "[INFO] Starting Ephaptic Language Trainer..."

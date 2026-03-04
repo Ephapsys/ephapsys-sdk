@@ -8,6 +8,8 @@
 
 set -euo pipefail
 
+MODE="${1:-run}" # run | smoke
+
 # Load .env if available (preserve spaces by using set -a)
 if [ -f ".env" ]; then
   echo "[INFO] Loading environment from .env"
@@ -29,6 +31,14 @@ fi
 if [ -z "$ORG_ID" ] || [ -z "$BOOTSTRAP_TOKEN" ]; then
   echo "[ERROR] Missing credentials. Set AOC_ORG_ID + AOC_PROVISIONING_TOKEN."
   exit 1
+fi
+
+if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
+  echo "[CI][smoke] Robot env validation OK."
+  echo "[CI][smoke] BASE_URL=$BASE_URL AGENT_ID=$AGENT_ID ANCHOR=$PERSONALIZE_ANCHOR"
+  python3 -m py_compile robot_agent.py
+  echo "[CI][smoke] robot_agent.py syntax OK."
+  exit 0
 fi
 
 # Bootstrap local venv to avoid system Python conflicts (PEP 668)
