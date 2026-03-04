@@ -95,6 +95,7 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 
 - `helloworld_agent.py` → Minimal TrustedAgent HelloWorld demo.
   - Includes optional commented GGUF/llama.cpp hints; keep default behavior unchanged unless you enable them.
+  - Includes optional commented A2A hints using `A2AClient` (send/inbox/ack) for peer-agent messaging.
 - `run_local.sh` → Local convenience wrapper.
 - `run_gcp.sh` → GCP launcher with `--staging/--production`, `--interactive/--no-interactive`, and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
 - `reattach_gcp.sh` → Smart reconnection helper. If it detects `helloworld_agent.py` running, it loads `.env`, activates the venv, and drops you into the chatbot. Otherwise it tails `~/helloworld/helloworld.log`.

@@ -37,6 +37,10 @@ def main():
     #     os.environ.setdefault("AOC_GGUF_MAX_NEW_TOKENS", "256")
 
     agent = TrustedAgent.from_env()
+    # Optional A2A mode (kept commented for default cleanliness):
+    # from ephapsys import A2AClient
+    # a2a = A2AClient.from_env()
+    # peer_agent = os.getenv("A2A_PEER_AGENT_ID", "").strip()
 
     print("=== Step 1: Verify Agent ===")
     try:
@@ -109,6 +113,23 @@ def main():
             reply = result.strip() if isinstance(result, str) else str(result)
 
             print(f"\n🤖 [Agent] > {reply}")
+
+            # Optional A2A send/inbox/ack (uncomment to enable):
+            # if peer_agent:
+            #     corr = f"{os.getenv('A2A_CORRELATION_PREFIX', 'hello')}-{int(time.time())}"
+            #     sent = a2a.send_message(
+            #         from_agent_id=agent.agent_id,
+            #         to_agent_id=peer_agent,
+            #         message_type="event",
+            #         correlation_id=corr,
+            #         payload={"prompt": user_input, "reply": reply},
+            #     )
+            #     print(f"[HelloWorld][A2A] sent message id={sent.get('message', {}).get('id')}")
+            #
+            # inbox = a2a.inbox(agent_id=agent.agent_id, limit=10)
+            # for msg in inbox.get("items", []):
+            #     print(f"[HelloWorld][A2A] inbox message from={msg.get('from_agent_id')} payload={msg.get('payload')}")
+            #     a2a.ack_message(message_id=msg["id"], agent_id=agent.agent_id)
 
         except KeyboardInterrupt:
             print("\n[HelloWorld] Shutting down.")
