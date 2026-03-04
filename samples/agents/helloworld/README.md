@@ -56,6 +56,7 @@ Complete the checklist below after publishing the new SDK and redeploying the AO
    ```bash
    pip install "ephapsys[modulation]"
    ```
+   For GGUF/llama.cpp CPU runtime, install either `llama-cpp-python` or a `llama-cli` binary.
 2. Copy `.env.example` to `.env` and fill in your `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
 3. Execute `./run_local.sh` – it sources `.env`, defaults `PERSONALIZE_ANCHOR=tpm`, and launches `helloworld_agent.py`.
 
@@ -93,6 +94,7 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 ## 📂 Files
 
 - `helloworld_agent.py` → Minimal TrustedAgent HelloWorld demo.
+  - Includes optional commented GGUF/llama.cpp hints; keep default behavior unchanged unless you enable them.
 - `run_local.sh` → Local convenience wrapper.
 - `run_gcp.sh` → GCP launcher with `--staging/--production`, `--interactive/--no-interactive`, and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
 - `reattach_gcp.sh` → Smart reconnection helper. If it detects `helloworld_agent.py` running, it loads `.env`, activates the venv, and drops you into the chatbot. Otherwise it tails `~/helloworld/helloworld.log`.

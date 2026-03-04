@@ -45,6 +45,7 @@ Choose the profile by workload:
 | Lightweight orchestrator/proxy only | `pip install ephapsys` |
 | Agent runtime (HelloWorld language) | `pip install "ephapsys[modulation]"` |
 | Agent runtime (Robot multimodal) | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
+| Agent runtime (GGUF / llama.cpp edge CPU) | `pip install ephapsys` + install `llama-cpp-python` or `llama-cli` |
 | Modulators/training scripts | `pip install "ephapsys[modulation]"` |
 | Modulators with full evaluation/report stack | `pip install "ephapsys[all]"` |
 
@@ -108,6 +109,13 @@ AOC_DOWNLOAD_TIMEOUT=60
 AOC_DOWNLOAD_CHUNK_KB=256
 AOC_DOWNLOAD_PROGRESS_STEP_MB=5
 AOC_DOWNLOAD_WORKERS=4
+```
+
+Optional GGUF runtime tuning:
+```bash
+AOC_LLAMA_CPP_CLI=llama-cli
+AOC_GGUF_CTX=2048
+AOC_GGUF_MAX_NEW_TOKENS=256
 ```
 
 ## Samples

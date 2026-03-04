@@ -27,6 +27,15 @@ logging.getLogger("transformers.generation.utils").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="Setting `pad_token_id` to `eos_token_id`.*")
 
 def main():
+    # Optional GGUF mode (kept commented for default cleanliness):
+    # If your language artifact is .gguf and you want llama.cpp CLI fallback,
+    # uncomment and set these before creating TrustedAgent.
+    #
+    # if os.getenv("MODEL_RUNTIME", "").lower() == "gguf":
+    #     os.environ.setdefault("AOC_LLAMA_CPP_CLI", "llama-cli")
+    #     os.environ.setdefault("AOC_GGUF_CTX", "2048")
+    #     os.environ.setdefault("AOC_GGUF_MAX_NEW_TOKENS", "256")
+
     agent = TrustedAgent.from_env()
 
     print("=== Step 1: Verify Agent ===")
@@ -67,6 +76,10 @@ def main():
     try:
         rt = agent.prepare_runtime()
         print(f"[HelloWorld] ✅ Runtime prepared")
+        # Optional GGUF visibility:
+        # lang_rt = (rt or {}).get("language") or {}
+        # if lang_rt.get("gguf_path"):
+        #     print(f"[HelloWorld] GGUF runtime detected: {lang_rt['gguf_path']}")
     except Exception as e:
         print(f"[HelloWorld] ❌ Runtime preparation failed: {e}")
         sys.exit(1)
