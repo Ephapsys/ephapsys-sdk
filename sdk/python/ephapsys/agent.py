@@ -419,6 +419,15 @@ class TrustedAgent:
         return cls(agent_id, api_base, api_key=None, storage_dir=storage, verify_ssl=verify)
 
     def _headers(self) -> Dict[str, str]:
+        # For provisioning-token auth, refresh from cache/exchange lazily so
+        # token expiry/rotation does not require process restart.
+        if os.getenv("AOC_PROVISIONING_TOKEN"):
+            self.api_key = get_api_key(
+                None,
+                base_url=self.api_base,
+                agent_instance_id=self.agent_id,
+                verify_ssl=self.verify_ssl,
+            )
         return {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
 
     def set_av_scanner(self, scanner: Callable[[bytes], bool]) -> None:
