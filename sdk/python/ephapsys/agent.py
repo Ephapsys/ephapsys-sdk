@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os, json, pathlib, hashlib, shutil, base64, time, subprocess, sys, platform, io, warnings, re, shlex, glob
+import concurrent.futures
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from typing import Dict, Any, List, Tuple, Optional, Callable, Set, Union
 
@@ -1993,6 +1994,59 @@ class TrustedAgent:
 
         raise RuntimeError(f"Download failed for {src}: {last_exc}") from last_exc
 
+    def _prepare_artifacts_parallel(self, model_id: str, artifacts: Dict[str, Dict[str, Any]], model_dir: pathlib.Path) -> Dict[str, str]:
+        """
+        Download/validate artifacts for a model with bounded parallelism.
+        Returns {artifact_name: local_path}
+        """
+        workers = max(1, int(os.getenv("AOC_DOWNLOAD_WORKERS", "4")))
+        jobs: List[Tuple[str, str, str, pathlib.Path]] = []
+        for name, meta in artifacts.items():
+            url = meta.get("url") or meta.get("storage_path")
+            if not url:
+                continue
+            sha = (meta.get("sha256") or "").removeprefix("sha256:")
+            fname = self._normalize_artifact_filename(name, url)
+            dst = model_dir / fname
+            jobs.append((name, url, sha, dst))
+
+        def _fetch(job: Tuple[str, str, str, pathlib.Path]) -> Tuple[str, str]:
+            name, url, sha, dst = job
+            if not dst.exists():
+                logger.debug("[SDK] Downloading %s:%s → %s", model_id, name, dst)
+                self._download(url, dst)
+            else:
+                logger.debug("[SDK] Cache hit %s:%s → %s", model_id, name, dst)
+            if sha:
+                calc = sha256_file(str(dst))
+                if calc.lower() != sha.lower():
+                    raise RuntimeError(f"Digest mismatch for {name} (got {calc}, expected {sha})")
+            return name, str(dst)
+
+        local_paths: Dict[str, str] = {}
+        if not jobs:
+            return local_paths
+
+        max_workers = min(workers, len(jobs))
+        if max_workers <= 1:
+            for job in jobs:
+                name, path = _fetch(job)
+                local_paths[name] = path
+            return local_paths
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            fut_map = {pool.submit(_fetch, job): job[0] for job in jobs}
+            for fut in concurrent.futures.as_completed(fut_map):
+                name = fut_map[fut]
+                try:
+                    _name, path = fut.result()
+                    local_paths[_name] = path
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Artifact preparation failed for model {model_id}, artifact {name}: {exc}"
+                    ) from exc
+        return local_paths
+
     def _download(self, src: str, dst: pathlib.Path) -> str:
         """
         Download or copy an artifact to the local cache.
@@ -2287,24 +2341,7 @@ class TrustedAgent:
             model_dir = self._cache_dir() / mid
             os.makedirs(model_dir, exist_ok=True)
 
-            local_paths: Dict[str, Any] = {}
-            for name, meta in arts.items():
-                url = meta.get("url") or meta.get("storage_path")
-                sha = (meta.get("sha256") or "").removeprefix("sha256:")
-                if not url:
-                    continue
-                fname = self._normalize_artifact_filename(name, url)
-                dst = model_dir / fname
-                if not dst.exists():
-                    logger.debug("[SDK] Downloading %s:%s → %s", mid, name, dst)
-                    self._download(url, dst)
-                else:
-                    logger.debug("[SDK] Cache hit %s:%s → %s", mid, name, dst)
-                if sha:
-                    calc = sha256_file(str(dst))
-                    if calc.lower() != sha.lower():
-                        raise RuntimeError(f"Digest mismatch for {name} (got {calc}, expected {sha})")
-                local_paths[name] = str(dst)
+            local_paths: Dict[str, Any] = self._prepare_artifacts_parallel(mid, arts, model_dir)
 
             # ✅ Handle ECM securely (via SIEManager)
             if "cipher_ecm_uri" in entry:
