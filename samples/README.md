@@ -13,3 +13,35 @@ Use the matching install command before running each sample:
 | `agents/robot` | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
 | `modulators/*` (training/modulation only) | `pip install "ephapsys[modulation]"` |
 | `modulators/*` (full eval/report stack) | `pip install "ephapsys[all]"` |
+
+## Continuous sample testing
+
+Sample automation is defined in `samples/ci/run_samples_ci.sh` with two tiers:
+
+- `smoke`: fast script/env/syntax validation (no live backend required)
+- `integration`: bounded HelloWorld one-shot run against a real backend + smoke for robot/modulator wrappers
+
+GitHub Actions workflow: `.github/workflows/samples-ci.yml`
+
+- `smoke` runs on:
+  - every `pull_request`
+  - every push to `main`/`master`
+- `integration` runs on:
+  - manual trigger (`workflow_dispatch`)
+  - daily schedule
+  - only when required secrets are configured
+  - robot mock integration executes when `ROBOT_AGENT_TEMPLATE_ID` secret is set
+
+Run locally:
+
+```bash
+bash samples/ci/run_samples_ci.sh smoke
+```
+
+```bash
+# Requires real backend credentials in env.
+bash samples/ci/run_samples_ci.sh integration
+```
+
+Maintainer reference:
+- `docs/MAINTAINERS_CI.md`

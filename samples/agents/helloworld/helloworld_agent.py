@@ -88,6 +88,17 @@ def main():
         print(f"[HelloWorld] ❌ Runtime preparation failed: {e}")
         sys.exit(1)
 
+    if os.getenv("HELLOWORLD_CI_ONESHOT", "0") == "1":
+        prompt = os.getenv("HELLOWORLD_CI_PROMPT", "hello")
+        try:
+            result = agent.run(prompt, model_kind="language")
+            reply = result.strip() if isinstance(result, str) else str(result)
+            print(f"[HelloWorld][oneshot] prompt={prompt!r} reply={reply[:200]}")
+            return
+        except Exception as e:
+            print(f"[HelloWorld][oneshot] failed: {e}")
+            sys.exit(1)
+
     print("=== HelloWorld Chatbot ===")
     print("Type your message and press Enter. Type 'exit' to quit.\n")
 
