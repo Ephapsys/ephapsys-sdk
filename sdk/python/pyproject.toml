@@ -48,6 +48,7 @@ eval = [
     "sacrebleu>=2.3.1",
     "rouge-score>=0.1.2",
     "jiwer>=3.0.3",
+    "python-docx>=1.1.2",
 ]
 vision = [
     "Pillow>=9.5.0",
@@ -74,6 +75,7 @@ all = [
     "sacrebleu>=2.3.1",
     "rouge-score>=0.1.2",
     "jiwer>=3.0.3",
+    "python-docx>=1.1.2",
     "Pillow>=9.5.0",
     "opencv-python-headless>=4.8.0",
     "sentence-transformers>=2.2.2",

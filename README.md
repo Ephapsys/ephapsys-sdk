@@ -30,6 +30,14 @@ pip install "ephapsys[vision]"          # vision/camera stack
 pip install "ephapsys[all]"             # full SDK dependency set
 ```
 
+TPM personalization prerequisites (Linux):
+```bash
+pip install "ephapsys[tpm]"
+sudo apt-get install -y tpm2-tools
+```
+On Ubuntu 22.04, verify that `tpm2-tools` / `tpm2-tss` and `tpm2-pytss` are compatible.
+Ubuntu 22.04 typically provides TSS2 3.x; some `tpm2-pytss` builds require TSS2 4.x.
+
 Choose the profile by workload:
 
 | Workload | Install command |

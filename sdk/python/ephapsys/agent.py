@@ -1308,6 +1308,60 @@ class TrustedAgent:
 
 
     # ---- TPM evidence (Linux + tpm2-tools) -----------------------------------
+    def _linux_os_release(self) -> Tuple[str, str]:
+        os_id = ""
+        os_ver = ""
+        try:
+            if os.path.exists("/etc/os-release"):
+                with open("/etc/os-release", "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("ID="):
+                            os_id = line.split("=", 1)[1].strip('"').lower()
+                        elif line.startswith("VERSION_ID="):
+                            os_ver = line.split("=", 1)[1].strip('"').lower()
+        except Exception:
+            pass
+        return os_id, os_ver
+
+    def _tpm_preflight(self):
+        """
+        Validate TPM dependencies before running quote flow, so errors are actionable.
+        Returns TPMT_SIGNATURE class if all checks pass.
+        """
+        required_tools = ("tpm2_createek", "tpm2_createak", "tpm2_readpublic", "tpm2_quote", "tpm2_pcrread")
+        missing_tools = [tool for tool in required_tools if not shutil.which(tool)]
+        if missing_tools:
+            raise RuntimeError(
+                "TPM preflight failed: missing tpm2-tools executables: "
+                + ", ".join(missing_tools)
+                + ". Install package 'tpm2-tools' and ensure tools are in PATH."
+            )
+
+        try:
+            from tpm2_pytss import TPMT_SIGNATURE  # type: ignore
+            return TPMT_SIGNATURE
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "TPM preflight failed: python package 'tpm2-pytss' is not installed. "
+                "Install with: pip install 'ephapsys[tpm]'"
+            ) from exc
+        except Exception as exc:
+            os_id, os_ver = self._linux_os_release()
+            hint = ""
+            if os_id == "ubuntu" and os_ver.startswith("22.04"):
+                hint = (
+                    " Detected Ubuntu 22.04. This commonly indicates a TSS2 compatibility mismatch "
+                    "(Ubuntu ships libtss2 3.x while newer tpm2-pytss expects TSS2 4.x). "
+                    "Use a compatible distro/runtime stack or install matching tpm2-tss/tpm2-tools versions."
+                )
+            raise RuntimeError(
+                "TPM preflight failed while importing 'tpm2-pytss': "
+                + str(exc)
+                + "."
+                + hint
+            ) from exc
+
     def _collect_tpm_evidence(self, nonce_b64: str) -> dict:
         """
         Collect TPM2_Quote evidence using tpm2-tools.
@@ -1318,9 +1372,9 @@ class TrustedAgent:
           - sig_b64        : base64(ECDSA signature in DER format)
           - pcrs           : optional { bank, selection[], values{idx:hex} }
         """
-        import shutil, subprocess, binascii
+        import binascii
         from pathlib import Path
-        from tpm2_pytss import TPMT_SIGNATURE
+        TPMT_SIGNATURE = self._tpm_preflight()
         from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
         force_real = (os.getenv("PERSONALIZE_ANCHOR") in ("tpm", "tee"))
@@ -1347,11 +1401,6 @@ class TrustedAgent:
                     f"STDOUT: {r.stdout or '<empty>'}"
                 )
             return r
-
-        # ensure tools available
-        for tool in ("tpm2_createek", "tpm2_createak", "tpm2_readpublic", "tpm2_quote", "tpm2_pcrread"):
-            if not shutil.which(tool):
-                raise RuntimeError(f"{tool} not found on PATH (install tpm2-tools)")
 
         home = Path(os.path.expanduser("~"))
         tdir = home / ".ephapsys" / "tpm"
@@ -1848,6 +1897,24 @@ class TrustedAgent:
         """
         return _mkdir(self._cache_dir() / model_id) / filename
 
+    def _normalize_artifact_filename(self, name: str, url: str) -> str:
+        """
+        Normalize artifact filenames for local runtime loading.
+        Handles backend/object-store names like:
+          <sha256>-tokenizer.json  -> tokenizer.json
+        Prefers explicit artifact key names when they look like filenames.
+        """
+        # Prefer explicit artifact name when it already carries a canonical filename.
+        if isinstance(name, str) and "." in name and "/" not in name:
+            return name
+
+        candidate = os.path.basename(url or "")
+        # Strip '<64 hex>-' prefix if present.
+        m = re.match(r"^[0-9a-fA-F]{64}-(.+)$", candidate)
+        if m:
+            return m.group(1)
+        return candidate
+
     def _download(self, src: str, dst: pathlib.Path) -> str:
         """
         Download or copy an artifact to the local cache.
@@ -1884,7 +1951,8 @@ class TrustedAgent:
                 logger.warning("[SDK][Artifacts] ⚠️ No URL for %s:%s", model_id, name)
                 continue
             try:
-                dst = local_dir / os.path.basename(url)
+                fname = self._normalize_artifact_filename(name, url)
+                dst = local_dir / fname
                 logger.debug("[SDK][Artifacts] → downloading %s:%s from %s", model_id, name, url)
                 resolved = self._download(url, dst)
                 local_paths[name] = resolved
@@ -2148,7 +2216,8 @@ class TrustedAgent:
                 sha = (meta.get("sha256") or "").removeprefix("sha256:")
                 if not url:
                     continue
-                dst = model_dir / os.path.basename(url)
+                fname = self._normalize_artifact_filename(name, url)
+                dst = model_dir / fname
                 if not dst.exists():
                     logger.debug("[SDK] Downloading %s:%s → %s", mid, name, dst)
                     self._download(url, dst)

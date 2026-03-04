@@ -20,6 +20,14 @@ pip install "ephapsys[vision]"      # alias: [video]
 pip install "ephapsys[all]"
 ```
 
+TPM personalization prerequisites (Linux):
+```bash
+pip install "ephapsys[tpm]"
+sudo apt-get install -y tpm2-tools
+```
+If you are on Ubuntu 22.04, ensure `tpm2-tools`, `tpm2-tss`, and `tpm2-pytss` are version-compatible.
+Ubuntu 22.04 commonly ships TSS2 3.x, while newer `tpm2-pytss` builds may expect TSS2 4.x.
+
 Choose the profile by workload:
 
 | Workload | Install command |
