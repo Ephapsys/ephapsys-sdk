@@ -3,6 +3,8 @@ node_modules/
 .cli_token
 .cookies
 .env
+.env.stag
+.env.prod
 .docker_sdk/
 .venv/
 gcp.env
