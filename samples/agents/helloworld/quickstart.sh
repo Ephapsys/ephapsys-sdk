@@ -16,7 +16,7 @@ Before continuing, edit .env and set:
   - AOC_MODULATION_TOKEN
   - HF_TOKEN
 
-If you do not have an Ephapsys account yet, visit https://ephapsys.com, register, create your organization, and generate the required tokens first.
+If you do not have an Ephapsys account yet, visit https://ephapsys.com, sign up, and generate the required organization and token values first.
 
 Then rerun:
   ./quickstart.sh

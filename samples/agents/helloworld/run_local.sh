@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-MODE="${1:-run}" # run | check | smoke | oneshot
+MODE="${1:-run}" # run | check
 
 info() {
   echo "[INFO] $*"
@@ -77,7 +77,7 @@ pick_anchor() {
   esac
 }
 
-if [ "$MODE" != "smoke" ] && [ ! -f ".env" ] && [ -f ".env.example" ]; then
+if [ ! -f ".env" ] && [ -f ".env.example" ]; then
   cp .env.example .env
   info "Created .env from .env.example. Fill in AOC_ORG_ID, AOC_PROVISIONING_TOKEN, and AGENT_TEMPLATE_ID, then rerun."
   exit 0
@@ -98,21 +98,9 @@ AGENT_ID=${AGENT_TEMPLATE_ID:-""}
 
 export PERSONALIZE_ANCHOR="$(pick_anchor)"
 
-if [ -z "${AGENT_ID}" ] && [ "$MODE" != "smoke" ] && [ "${SAMPLE_CI_SMOKE:-0}" != "1" ]; then
+if [ -z "${AGENT_ID}" ]; then
   error "Missing AGENT_TEMPLATE_ID. Set it in .env before running the sample."
   exit 1
-fi
-
-if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
-  echo "[CI][smoke] HelloWorld env validation OK."
-  echo "[CI][smoke] BASE_URL=$BASE_URL AGENT_ID=${AGENT_ID:-agent_helloworld} ANCHOR=$PERSONALIZE_ANCHOR"
-  python3 -m py_compile helloworld_agent.py
-  echo "[CI][smoke] helloworld_agent.py syntax OK."
-  exit 0
-fi
-
-if [ "$MODE" = "oneshot" ]; then
-  export HELLOWORLD_CI_ONESHOT=1
 fi
 
 if [ -z "$ORG_ID" ] || [ -z "$BOOTSTRAP_TOKEN" ]; then

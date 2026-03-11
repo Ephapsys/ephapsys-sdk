@@ -120,14 +120,14 @@ If startup fails, check these first:
 Complete the checklist below after publishing the new SDK and redeploying the AOC backend:
 
 1. **Modulated model + agent template** – Ensure the model you want is modulated in AOC and bound to an agent template; capture the template ID for `.env.*`.
-2. **API credentials** – Keep your usual `.env`, `.env.stag`, and `.env.prod` files up to date (the script automatically prefers those; it falls back to the local copies in this folder only if the global ones are missing).
+2. **API credentials** – Keep your usual `.env`, `.env.stag`, and `.env.prod` files up to date in your local/deployment environment. These files are intentionally not tracked in git.
 3. **gcloud access** – Run `gcloud auth login` (or `gcloud auth application-default login`) on the machine invoking `run_gcp.sh` and make sure you can `gcloud compute ssh` into the target project/zone.
 4. **Compute IAM** – The user running `gcloud` needs `roles/compute.instanceAdmin.v1`. Use `./check_iam_role.sh --project <project> --member user:<you>` (or grant the role via Cloud Console).
 5. **Cloud KMS key (only if `PERSONALIZE_ANCHOR=hsm`)**
    - If you already have a key, set `HSM_KMS_KEY` (and optionally `HSM_KMS_CREDENTIALS`) in `.env.stag`/`.env.prod`.
    - Otherwise do nothing—`run_gcp.sh` will automatically call `./provision_kms_key.sh` (using the default Compute Engine service account or the one you specify via `COMPUTE_SERVICE_ACCOUNT`) and capture the resulting `HSM_KMS_KEY` for you.
 6. **Vendor HSM (non-GCP)** – Skip the KMS step, set `HSM_HELPER="<your helper command>"`, and export whatever PKCS#11/KMIP env vars the helper requires; confirm it prints valid JSON when invoked with a nonce.
-7. **Local `.env` sanity check** – Run `grep -v '^#' .env.stag` (or `.env.prod`) and verify no required variable is blank.
+7. **Local `.env` sanity check** – Run `grep -v '^#' .env.stag` (or `.env.prod`) on your local copy and verify no required variable is blank.
 
 ### Local
 
@@ -181,4 +181,5 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 - `provision_kms_key.sh` → Convenience script to create a Cloud KMS key (optionally HSM‑backed) and grant a service account the `roles/cloudkms.signerVerifier` role.
 - *IAM note*: The scripts call `gcloud compute ssh`, which requires `roles/compute.instanceAdmin.v1`. If you’re running in a sandbox where gcloud can’t write credentials (common in CI), grant that role once via Cloud Console or from a machine with full gcloud access.
 - `check_iam_role.sh` → Quick helper to verify whether the current (or supplied) gcloud account has `roles/compute.instanceAdmin.v1` on the project.
-- `.env.example`, `.env.stag`, `.env.prod` → env templates for each target (copied during deployment).
+- `.env.example` → tracked example env for local bootstrap.
+- `.env.stag`, `.env.prod` → local-only env files used for staging/production runs when present.

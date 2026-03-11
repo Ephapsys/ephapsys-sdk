@@ -200,7 +200,7 @@ fetch_model_templates() {
 resolve_model_template() {
   fetch_model_templates | jq -r --arg repo "$MODEL_REPO" --arg kind "$MODEL_KIND" --arg name "$MODEL_NAME" '
     (.items // [])
-    | map(select(((.kind // "" | ascii_downcase) == ($kind | ascii_downcase))
+    | map(select((((.model_kind // .kind // "") | ascii_downcase) == ($kind | ascii_downcase))
       and ((.source_repo // "") == $repo or (.name // "") == $name or (.name // "") == ("HuggingFace " + $repo))))
     | sort_by(.created_at // 0)
     | last
@@ -209,20 +209,38 @@ resolve_model_template() {
 
 register_model_template() {
   local cli_token="$1"
+  local payload
+  local response
+  local ok
+  cli_token="$(printf '%s' "$cli_token" | tr -d '\r\n')"
   info "Registering language model template for $MODEL_REPO"
-  curl -sS -X POST "$CLI_API/models/register" \
+  payload=$(jq -n \
+    --arg provider "huggingface" \
+    --arg model_repo "$MODEL_REPO" \
+    --arg revision "$MODEL_REVISION" \
+    --arg model_name "$MODEL_NAME" \
+    --arg model_kind "$MODEL_KIND" \
+    --arg hf_token "$HF_TOKEN" \
+    '{
+      provider: $provider,
+      ids: [$model_repo],
+      repo_id: $model_repo,
+      revision: $revision,
+      auto_register: true,
+      name: $model_name,
+      model_kind: $model_kind,
+      hf_token: $hf_token
+    }')
+  response=$(curl -sS -X POST "$CLI_API/models/register" \
     -H "Authorization: Bearer ${cli_token}" \
     -H "Content-Type: application/json" \
-    -d "{
-      \"provider\": \"huggingface\",
-      \"ids\": [\"${MODEL_REPO}\"],
-      \"repo_id\": \"${MODEL_REPO}\",
-      \"revision\": \"${MODEL_REVISION}\",
-      \"auto_register\": true,
-      \"name\": \"${MODEL_NAME}\",
-      \"model_kind\": \"${MODEL_KIND}\",
-      \"hf_token\": \"${HF_TOKEN}\"
-    }" >/dev/null
+    -d "$payload")
+  ok=$(printf '%s' "$response" | jq -r '.ok // empty' 2>/dev/null || true)
+  if [[ "$ok" != "true" ]]; then
+    error "Model registration failed"
+    printf '%s\n' "$response" >&2
+    exit 1
+  fi
 }
 
 model_ready() {
