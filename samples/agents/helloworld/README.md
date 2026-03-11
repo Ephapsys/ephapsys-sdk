@@ -15,7 +15,6 @@ cd ephapsys-sdk/samples/agents/helloworld
 `quickstart.sh` does:
 - `cp .env.example .env` if `.env` is missing
 - `./push.sh --mode local`
-- `./run_local.sh check`
 - `./run_local.sh`
 
 If you want to bootstrap everything from this sample instead of manually creating a model template, running modulation, and then creating an agent template, use:
@@ -24,7 +23,6 @@ If you want to bootstrap everything from this sample instead of manually creatin
 cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
 ./push.sh --mode local
-./run_local.sh check
 ./run_local.sh
 ```
 
@@ -50,7 +48,6 @@ then the shortest path is:
 ```bash
 cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
-./run_local.sh check
 ./run_local.sh
 ```
 
@@ -59,7 +56,8 @@ cp .env.example .env
 - installs the local SDK with `modulation` extras if it is not already available
 - chooses `PERSONALIZE_ANCHOR=none` on macOS or machines without TPM tooling
 - chooses `PERSONALIZE_ANCHOR=tpm` on Linux when `tpm2-tools` is available
-- supports `./run_local.sh check` so you can validate org/template/model setup before launching the sample
+- runs the backend preflight automatically before launching the sample
+- still supports `./run_local.sh check` if you want the preflight without launching
 
 Before the final command, edit `.env` and set:
 - `AOC_BASE_URL` (`AOC_API_URL` is still accepted as a compatibility alias)
@@ -109,8 +107,7 @@ Use this order for the least friction:
 2. Create one agent template in AOC that references that model.
 3. Copy `.env.example` to `.env`.
 4. Fill in `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
-5. Run `./run_local.sh check`.
-6. Run `./run_local.sh`.
+5. Run `./run_local.sh`.
 
 If startup fails, check these first:
 - `404 Agent template not found`: `AGENT_TEMPLATE_ID` is wrong or the template does not exist in that AOC environment.
