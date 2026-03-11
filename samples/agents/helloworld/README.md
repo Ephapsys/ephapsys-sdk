@@ -13,7 +13,7 @@ cd ephapsys-sdk/samples/agents/helloworld
 ```
 
 `quickstart.sh` does:
-- `cp .env.example .env` if `.env` is missing
+- `cp .env.example .env` if `.env` is missing, then stops and tells you to fill in the required values first
 - `./push.sh --mode local`
 - `./run_local.sh`
 
