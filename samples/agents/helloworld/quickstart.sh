@@ -10,5 +10,4 @@ if [[ ! -f ".env" && -f ".env.example" ]]; then
 fi
 
 ./push.sh --mode local "$@"
-./run_local.sh check
 ./run_local.sh
