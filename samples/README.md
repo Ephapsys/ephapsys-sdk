@@ -14,6 +14,17 @@ Use the matching install command before running each sample:
 | `modulators/*` (training/modulation only) | `pip install "ephapsys[modulation]"` |
 | `modulators/*` (full eval/report stack) | `pip install "ephapsys[all]"` |
 
+For `agents/helloworld`, the local wrapper can bootstrap a fresh checkout for you:
+
+```bash
+cd samples/agents/helloworld
+cp .env.example .env
+./run_local.sh check
+./run_local.sh
+```
+
+The script creates `.venv`, installs the local SDK with `modulation` extras if needed, picks a sensible default personalization anchor for local development, and supports `./run_local.sh check` for backend preflight before startup.
+
 ## Continuous sample testing
 
 Sample automation is defined in `samples/ci/run_samples_ci.sh` with two tiers:

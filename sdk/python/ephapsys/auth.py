@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import time
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 
 import requests
 
@@ -63,6 +63,38 @@ def _exchange_provisioning_token(
     ttl = int(data.get("expires_in") or 900)
     _TOKEN_CACHE[key] = (token, now + max(30, ttl))
     return token
+
+
+def check_helloworld_bootstrap(
+    *,
+    base_url: str,
+    org_id: str,
+    provisioning_token: str,
+    agent_template_id: str,
+    verify_ssl: bool = True,
+) -> Dict[str, Any]:
+    url = f"{base_url.rstrip('/')}/sdk/onboarding/helloworld/check"
+    body = {
+        "org_id": org_id,
+        "provisioning_token": provisioning_token,
+        "agent_template_id": agent_template_id,
+    }
+    try:
+        resp = requests.post(url, json=body, timeout=15, verify=verify_ssl)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Failed to run HelloWorld preflight at {url}: {e}") from e
+
+    if resp.status_code != 200:
+        detail = ""
+        try:
+            detail = (resp.json() or {}).get("detail", "")
+        except Exception:
+            detail = resp.text.strip()
+        raise RuntimeError(
+            f"HelloWorld preflight failed ({resp.status_code})"
+            + (f": {detail}" if detail else "")
+        )
+    return resp.json()
 
 
 def get_api_key(
