@@ -5,10 +5,23 @@ It verifies, personalizes (if needed), and runs a language model to output **"He
 
 ## Fastest Local Path
 
+The default one-command path is now:
+
+```bash
+cd ephapsys-sdk/samples/agents/helloworld
+./quickstart.sh
+```
+
+`quickstart.sh` does:
+- `cp .env.example .env` if `.env` is missing
+- `./push.sh --mode local`
+- `./run_local.sh check`
+- `./run_local.sh`
+
 If you want to bootstrap everything from this sample instead of manually creating a model template, running modulation, and then creating an agent template, use:
 
 ```bash
-cd Product/ephapsys-sdk/samples/agents/helloworld
+cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
 ./push.sh --mode local
 ./run_local.sh check
@@ -35,7 +48,7 @@ If you already have:
 then the shortest path is:
 
 ```bash
-cd Product/ephapsys-sdk/samples/agents/helloworld
+cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
 ./run_local.sh check
 ./run_local.sh
