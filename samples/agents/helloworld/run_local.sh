@@ -22,6 +22,41 @@ error() {
   echo "[ERROR] $*" >&2
 }
 
+run_preflight() {
+  info "Running HelloWorld preflight checks..."
+  export AOC_BASE_URL="$BASE_URL"
+  python3 - <<'PY'
+import os
+import sys
+
+from ephapsys.auth import check_helloworld_bootstrap
+
+base_url = os.environ["AOC_BASE_URL"]
+org_id = os.environ["AOC_ORG_ID"]
+provisioning_token = os.environ["AOC_PROVISIONING_TOKEN"]
+agent_template_id = os.environ["AGENT_TEMPLATE_ID"]
+verify_ssl = os.getenv("AOC_VERIFY_SSL", "1").strip().lower() not in ("0", "false", "no", "")
+
+result = check_helloworld_bootstrap(
+    base_url=base_url,
+    org_id=org_id,
+    provisioning_token=provisioning_token,
+    agent_template_id=agent_template_id,
+    verify_ssl=verify_ssl,
+)
+
+print("[CHECK] HelloWorld backend preflight")
+for item in result.get("checks", []):
+    prefix = "PASS" if item.get("ok") else "FAIL"
+    print(f"[CHECK] {prefix} {item.get('code')}: {item.get('message')}")
+
+if not result.get("ready"):
+    sys.exit(1)
+
+print("[CHECK] Ready to run HelloWorld.")
+PY
+}
+
 pick_anchor() {
   if [ -n "${PERSONALIZE_ANCHOR:-}" ]; then
     printf '%s\n' "$PERSONALIZE_ANCHOR"
@@ -111,40 +146,11 @@ if ! python3 -c "import ephapsys, transformers" >/dev/null 2>&1; then
 fi
 
 if [ "$MODE" = "check" ]; then
-  info "Running HelloWorld preflight checks..."
-  export AOC_BASE_URL="$BASE_URL"
-  python3 - <<'PY'
-import os
-import sys
-
-from ephapsys.auth import check_helloworld_bootstrap
-
-base_url = os.environ["AOC_BASE_URL"]
-org_id = os.environ["AOC_ORG_ID"]
-provisioning_token = os.environ["AOC_PROVISIONING_TOKEN"]
-agent_template_id = os.environ["AGENT_TEMPLATE_ID"]
-verify_ssl = os.getenv("AOC_VERIFY_SSL", "1").strip().lower() not in ("0", "false", "no", "")
-
-result = check_helloworld_bootstrap(
-    base_url=base_url,
-    org_id=org_id,
-    provisioning_token=provisioning_token,
-    agent_template_id=agent_template_id,
-    verify_ssl=verify_ssl,
-)
-
-print("[CHECK] HelloWorld backend preflight")
-for item in result.get("checks", []):
-    prefix = "PASS" if item.get("ok") else "FAIL"
-    print(f"[CHECK] {prefix} {item.get('code')}: {item.get('message')}")
-
-if not result.get("ready"):
-    sys.exit(1)
-
-print("[CHECK] Ready to run HelloWorld.")
-PY
+  run_preflight
   exit 0
 fi
+
+run_preflight
 
 info "Starting HelloWorld Agent..."
 echo "  BASE_URL: $BASE_URL"
