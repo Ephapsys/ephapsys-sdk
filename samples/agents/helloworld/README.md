@@ -3,6 +3,34 @@
 This sample demonstrates the simplest possible agent using the Ephapsys SDK.  
 It verifies, personalizes (if needed), and runs a language model to output **"Hello World"**.
 
+## Fastest Local Path
+
+If you already have:
+- an Ephapsys org ID
+- a provisioning token
+- an agent template ID wired to a modulated language model
+
+then the shortest path is:
+
+```bash
+cd Product/ephapsys-sdk/samples/agents/helloworld
+cp .env.example .env
+./run_local.sh check
+./run_local.sh
+```
+
+`run_local.sh` now does the local bootstrap work for you:
+- creates `.venv` automatically if needed
+- installs the local SDK with `modulation` extras if it is not already available
+- chooses `PERSONALIZE_ANCHOR=none` on macOS or machines without TPM tooling
+- chooses `PERSONALIZE_ANCHOR=tpm` on Linux when `tpm2-tools` is available
+- supports `./run_local.sh check` so you can validate org/template/model setup before launching the sample
+
+Before the final command, edit `.env` and set:
+- `AOC_BASE_URL` (`AOC_API_URL` is still accepted as a compatibility alias)
+- `AOC_ORG_ID`
+- `AOC_PROVISIONING_TOKEN`
+- `AGENT_TEMPLATE_ID`
 
 > ⚠️ **Important Requirements Before Running**  
 > This demo will not work out of the box unless you first prepare your Ephapsys environment:  
@@ -37,6 +65,24 @@ It verifies, personalizes (if needed), and runs a language model to output **"He
 
 ## ▶️ Run
 
+### Local First-Run Checklist
+
+Use this order for the least friction:
+
+1. Modulate one language model in AOC.
+2. Create one agent template in AOC that references that model.
+3. Copy `.env.example` to `.env`.
+4. Fill in `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
+5. Run `./run_local.sh check`.
+6. Run `./run_local.sh`.
+
+If startup fails, check these first:
+- `404 Agent template not found`: `AGENT_TEMPLATE_ID` is wrong or the template does not exist in that AOC environment.
+- `FAIL language_model_missing`: the agent template exists, but it does not reference a language model.
+- `FAIL language_model_not_ready` or `FAIL language_model_missing_artifacts`: the linked language model exists, but it is not yet modulated or published correctly.
+- Runtime preparation failure: the template exists, but the language model was not modulated or published correctly.
+- Personalization failure on a laptop: set `PERSONALIZE_ANCHOR=none` unless you explicitly want TPM/HSM flow.
+
 ### Before you run `run_gcp.sh`
 Complete the checklist below after publishing the new SDK and redeploying the AOC backend:
 
@@ -52,13 +98,11 @@ Complete the checklist below after publishing the new SDK and redeploying the AO
 
 ### Local
 
-1. Install runtime dependencies:
-   ```bash
-   pip install "ephapsys[modulation]"
-   ```
-   For GGUF/llama.cpp CPU runtime, install either `llama-cpp-python` or a `llama-cli` binary.
-2. Copy `.env.example` to `.env` and fill in your `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
-3. Execute `./run_local.sh` – it sources `.env`, defaults `PERSONALIZE_ANCHOR=tpm`, and launches `helloworld_agent.py`.
+1. Copy `.env.example` to `.env` and fill in `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
+2. Execute `./run_local.sh check`.
+3. Execute `./run_local.sh`.
+4. On first run, the script creates `.venv` and installs the local SDK with `modulation` extras automatically.
+5. For GGUF/llama.cpp CPU runtime, also install either `llama-cpp-python` or a `llama-cli` binary.
 
 ### GCP VM
 

@@ -66,3 +66,33 @@ def test_get_api_key_cache_not_split_by_agent_instance(monkeypatch):
     assert t1 == "jwt-token"
     assert t2 == "jwt-token"
     assert calls["count"] == 1
+
+
+def test_check_helloworld_bootstrap(monkeypatch):
+    def _fake_post(url, json, timeout, verify):
+        assert url == "http://localhost:7001/sdk/onboarding/helloworld/check"
+        assert json == {
+            "org_id": "org_demo",
+            "provisioning_token": "boot-token",
+            "agent_template_id": "agent_temp_demo",
+        }
+        return _Resp(
+            200,
+            {
+                "ok": True,
+                "ready": True,
+                "checks": [
+                    {"code": "provisioning_token_valid", "ok": True},
+                    {"code": "organization_active", "ok": True},
+                ],
+            },
+        )
+
+    monkeypatch.setattr(auth.requests, "post", _fake_post)
+    out = auth.check_helloworld_bootstrap(
+        base_url="http://localhost:7001",
+        org_id="org_demo",
+        provisioning_token="boot-token",
+        agent_template_id="agent_temp_demo",
+    )
+    assert out["ready"] is True
