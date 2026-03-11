@@ -6,7 +6,22 @@ cd "$SCRIPT_DIR"
 
 if [[ ! -f ".env" && -f ".env.example" ]]; then
   cp .env.example .env
-  echo "[INFO] Created .env from .env.example"
+  cat <<'EOF'
+[INFO] Created .env from .env.example
+
+Before continuing, edit .env and set:
+  - AOC_BASE_URL
+  - AOC_ORG_ID
+  - AOC_PROVISIONING_TOKEN
+  - AOC_MODULATION_TOKEN
+  - HF_TOKEN
+
+If you do not have an Ephapsys account yet, visit https://ephapsys.com, register, create your organization, and generate the required tokens first.
+
+Then rerun:
+  ./quickstart.sh
+EOF
+  exit 0
 fi
 
 ./push.sh --mode local "$@"
