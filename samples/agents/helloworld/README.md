@@ -5,6 +5,28 @@ It verifies, personalizes (if needed), and runs a language model to output **"He
 
 ## Fastest Local Path
 
+If you want to bootstrap everything from this sample instead of manually creating a model template, running modulation, and then creating an agent template, use:
+
+```bash
+cd Product/ephapsys-sdk/samples/agents/helloworld
+cp .env.example .env
+./push.sh --mode local
+./run_local.sh check
+./run_local.sh
+```
+
+For GCP-based modulation instead of local modulation:
+
+```bash
+./push.sh --mode gcp --gpu t4
+```
+
+`push.sh` reuses the existing language modulator sample and automates this sequence:
+- resolve or register the canonical HelloWorld language model template (`google/flan-t5-small` by default)
+- modulate it locally or on GCP
+- create or reuse a HelloWorld agent template bound to that model
+- write `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` back into `.env`
+
 If you already have:
 - an Ephapsys org ID
 - a provisioning token
@@ -30,6 +52,7 @@ Before the final command, edit `.env` and set:
 - `AOC_BASE_URL` (`AOC_API_URL` is still accepted as a compatibility alias)
 - `AOC_ORG_ID`
 - `AOC_PROVISIONING_TOKEN`
+- `AOC_MODULATION_TOKEN` if you plan to use `./push.sh`
 - `AGENT_TEMPLATE_ID`
 
 > ⚠️ **Important Requirements Before Running**  
