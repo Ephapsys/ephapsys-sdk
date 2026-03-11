@@ -7,6 +7,18 @@ set -euo pipefail
 
 MODE="${1:-run}" # run | smoke
 
+ensure_python_deps() {
+  if python3 -c "import pkg_resources" >/dev/null 2>&1; then
+    return
+  fi
+  echo "[INFO] Installing local Python bootstrap dependency: setuptools<74"
+  python3 -m pip install 'setuptools<74'
+  python3 -c "import pkg_resources" >/dev/null 2>&1 || {
+    echo "[ERROR] pkg_resources is still unavailable after installing setuptools<74"
+    exit 1
+  }
+}
+
 # --- Load environment from .env if present ---
 if [ -f ".env" ]; then
   echo "[INFO] Loading environment from .env"
@@ -35,6 +47,8 @@ if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
   echo "[CI][smoke] train_language.py syntax OK."
   exit 0
 fi
+
+ensure_python_deps
 
 echo "[INFO] Starting Ephaptic Language Trainer..."
 echo "  BASE_URL:          $BASE_URL"
