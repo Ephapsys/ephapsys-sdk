@@ -122,6 +122,27 @@ AOC_GGUF_MAX_NEW_TOKENS=256
 - See `samples/agents/helloworld` for a minimal chatbot agent.
 - See `samples/agents/robot` for a full multi-modal reference agent.
 
+Fastest local HelloWorld path from this repo:
+
+```bash
+cd samples/agents/helloworld
+cp .env.example .env
+./run_local.sh check
+./run_local.sh
+```
+
+Fill in `.env` with:
+- `AOC_BASE_URL` (`AOC_API_URL` remains a compatibility alias)
+- `AOC_ORG_ID`
+- `AOC_PROVISIONING_TOKEN`
+- `AGENT_TEMPLATE_ID`
+
+Notes:
+- `run_local.sh` creates `.venv` automatically and installs the local SDK with `modulation` extras on first run.
+- `run_local.sh check` validates the org, provisioning token, agent template, and linked language model before launching the sample.
+- On macOS and non-TPM machines, the sample defaults to `PERSONALIZE_ANCHOR=none` for a smoother local dev flow.
+- On Linux with `tpm2-tools` installed, the sample defaults to `PERSONALIZE_ANCHOR=tpm`.
+
 ## Contributions, Support and Security
 - **Contributions:** Open issues/PRs with clear repro steps, expected vs. actual results, and environment (OS, Python, SDK version). Run lint/tests (`python -m pip install -r requirements-dev.txt && pytest`) before submitting.
 - **Support:** For usage help, file a “question” issue or email support@ephapsys.com with logs, SDK version, and API base URL. We aim to respond within 1 business day.
