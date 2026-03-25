@@ -149,8 +149,9 @@ Fill in `.env` with:
 
 Notes:
 - `quickstart.sh` creates `.env` from `.env.example` if needed, then stops so you can fill in the required values.
-- on rerun, `quickstart.sh` prefers existing HelloWorld starter templates first and only falls back to `./push.sh --mode local` if they are missing.
-- `run.sh --local` is the public local entrypoint; `run.sh --local check` runs the preflight without launching.
+- on rerun, `quickstart.sh` prefers existing HelloWorld starter templates first and only falls back to `./push.sh --local` if they are missing.
+- `AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI. `./push.sh` can write template IDs back into `.env`, but it does not create or refresh provisioning credentials for you.
+- `run.sh --local` is the public local entrypoint and already runs preflight automatically before launch.
 - `run_local.sh` still exists as the underlying helper, but `run.sh` is the supported entrypoint.
 - `push.sh` defaults to idempotent publish for the HelloWorld starter path; use `--no-idempotent` if you explicitly want a full modulation run.
 - the default HelloWorld language model is `Qwen/Qwen2.5-0.5B-Instruct`.

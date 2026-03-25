@@ -15,7 +15,7 @@ cd ephapsys-sdk/samples/agents/helloworld
 `quickstart.sh` does:
 - `cp .env.example .env` if `.env` is missing, then stops and tells you to fill in the required values first
 - checks AOC for existing HelloWorld starter model/agent templates and writes their IDs into `.env` when found
-- falls back to `./push.sh --mode local` only if those starter templates are not available yet
+- falls back to `./push.sh --local` only if those starter templates are not available yet
 - `./run.sh --local`
 
 For the default HelloWorld flow, the only values you normally need to set in `.env` before `./quickstart.sh` are:
@@ -26,20 +26,21 @@ For the default HelloWorld flow, the only values you normally need to set in `.e
 
 Leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run. `./quickstart.sh` will first try to reuse existing HelloWorld starter templates, and only call `./push.sh` if it cannot find them.
 Leave `HF_TOKEN` blank unless you switch away from the default public repo (`Qwen/Qwen2.5-0.5B-Instruct`) to a gated or private model.
+`AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI. `./push.sh` can bootstrap the model and agent template IDs, but it does not create or refresh provisioning credentials.
 
 If you want to bootstrap everything from this sample instead of manually creating a model template, running modulation, and then creating an agent template, use:
 
 ```bash
 cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
-./push.sh --mode local
+./push.sh --local
 ./run.sh --local
 ```
 
 For GCP-based modulation instead of local modulation:
 
 ```bash
-./push.sh --mode gcp --gpu t4
+./push.sh --gcp --gpu t4
 ```
 
 `push.sh` reuses the existing language modulator sample and automates this sequence:
@@ -69,7 +70,6 @@ cp .env.example .env
 - chooses `PERSONALIZE_ANCHOR=none` on macOS or machines without TPM tooling
 - chooses `PERSONALIZE_ANCHOR=tpm` on Linux when `tpm2-tools` is available
 - runs the backend preflight automatically before launching the sample
-- still supports `./run.sh --local check` if you want the preflight without launching
 
 Before the final command, edit `.env` and set:
 - `AOC_BASE_URL` (`AOC_API_URL` is still accepted as a compatibility alias)
@@ -77,6 +77,8 @@ Before the final command, edit `.env` and set:
 - `AOC_PROVISIONING_TOKEN`
 - `AOC_MODULATION_TOKEN` if you plan to use `./push.sh`
 - `AGENT_TEMPLATE_ID` only if you are skipping `./push.sh` and already have an existing template
+
+`AOC_PROVISIONING_TOKEN` must come from the AOC UI for the target environment. If it is stale or invalid, `./run.sh --local` will fail preflight even if `./push.sh` succeeded.
 
 > ⚠️ **Important Requirements Before Running**  
 > This demo still requires a real Ephapsys organization plus valid tokens.  
@@ -111,6 +113,10 @@ Use this order for the least friction:
 4. Run `./quickstart.sh`.
 5. If you want to rerun the agent later without rebuilding assets, run `./run.sh --local`.
 
+Keep in mind:
+- `AOC_PROVISIONING_TOKEN` is a secret developer credential copied from the AOC UI.
+- `./push.sh` writes `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` into `.env`, but it does not mint or rotate provisioning tokens.
+
 If startup fails, check these first:
 - `404 Agent template not found`: `AGENT_TEMPLATE_ID` is wrong or the template does not exist in that AOC environment.
 - `FAIL language_model_missing`: the agent template exists, but it does not reference a language model.
@@ -135,7 +141,7 @@ Complete the checklist below after publishing the new SDK and redeploying the AO
 
 1. Recommended first run: execute `./quickstart.sh`.
 2. `quickstart.sh` first looks for existing HelloWorld starter templates in AOC and writes `MODEL_TEMPLATE_ID` / `AGENT_TEMPLATE_ID` into `.env` when found.
-3. If the starter templates do not exist yet, `quickstart.sh` falls back to `./push.sh --mode local`, then writes the resulting IDs into `.env`.
+3. If the starter templates do not exist yet, `quickstart.sh` falls back to `./push.sh --local`, then writes the resulting IDs into `.env`.
 4. It then launches `./run.sh --local`.
 5. On first run, `run.sh --local` creates `.venv` and installs the local SDK with `modulation` extras automatically via `run_local.sh`.
 5. For GGUF/llama.cpp CPU runtime, also install either `llama-cpp-python` or a `llama-cli` binary.

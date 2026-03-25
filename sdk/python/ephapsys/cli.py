@@ -20,7 +20,7 @@ except PackageNotFoundError:
 
 from . import TrustedAgent
 from .manifest import export_agent_manifest
-from .session import login as sdk_login, auth_headers, get_api_url
+from .session import DEFAULT_API_URL, login as sdk_login, auth_headers, get_api_url
 from .auth import get_api_key as resolve_api_key
 
 
@@ -483,8 +483,13 @@ def build_parser():
 
 import shutil
 
-def print_banner():
+def _normalize_url(url: str) -> str:
+    return (url or "").rstrip("/")
+
+
+def print_banner(base_url: str = None):
     GOLD  = "\033[38;5;220m"   # Gold accent (works everywhere on macOS Terminal)
+    PINK  = "\033[38;5;213m"
     RESET = "\033[0m"
 
     # Banner text
@@ -502,23 +507,28 @@ def print_banner():
     centered_art = "\n".join(line.center(width) for line in art.splitlines())
     subtitle = f"Ephapsys CLI v{__version__} — Trusted AI Agents Platform"
     centered_subtitle = subtitle.center(width)
+    hint = ""
+    resolved_base_url = _normalize_url(base_url or get_api_url())
+    if resolved_base_url and resolved_base_url != _normalize_url(get_api_url(DEFAULT_API_URL)):
+        hint = f"{PINK}{('Base URL: ' + resolved_base_url).center(width)}{RESET}\n"
 
-    print(f"{GOLD}{centered_art}\n{centered_subtitle}{RESET}\n")
+    print(f"{GOLD}{centered_art}\n{centered_subtitle}{RESET}\n{hint}")
 
 
 
 # ---------------- Entry ----------------
 def main():
     parser = build_parser()
+    prelim_args = None
+    try:
+        prelim_args, _ = parser.parse_known_args()
+    except SystemExit:
+        prelim_args = None
 
-    # show banner only if no args or "login" command
-    show_banner = (
-        len(sys.argv) == 1 or
-        (len(sys.argv) > 1 and sys.argv[1] == "login")
-    )
+    show_banner = len(sys.argv) == 1 or getattr(prelim_args, "cmd", None) == "login"
 
     if show_banner and sys.stdout.isatty():
-        print_banner()
+        print_banner(getattr(prelim_args, "base_url", None))
 
     if len(sys.argv) == 1:
         parser.print_help()

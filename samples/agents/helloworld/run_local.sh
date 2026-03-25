@@ -25,7 +25,7 @@ error() {
 run_preflight() {
   info "Running HelloWorld preflight checks..."
   export AOC_BASE_URL="$BASE_URL"
-  python3 - <<'PY'
+  if ! python3 - <<'PY'
 import os
 import sys
 
@@ -37,13 +37,17 @@ provisioning_token = os.environ["AOC_PROVISIONING_TOKEN"]
 agent_template_id = os.environ["AGENT_TEMPLATE_ID"]
 verify_ssl = os.getenv("AOC_VERIFY_SSL", "1").strip().lower() not in ("0", "false", "no", "")
 
-result = check_helloworld_bootstrap(
-    base_url=base_url,
-    org_id=org_id,
-    provisioning_token=provisioning_token,
-    agent_template_id=agent_template_id,
-    verify_ssl=verify_ssl,
-)
+try:
+    result = check_helloworld_bootstrap(
+        base_url=base_url,
+        org_id=org_id,
+        provisioning_token=provisioning_token,
+        agent_template_id=agent_template_id,
+        verify_ssl=verify_ssl,
+    )
+except Exception as exc:
+    print(f"[CHECK] FAIL preflight: {exc}")
+    sys.exit(1)
 
 print("[CHECK] HelloWorld backend preflight")
 for item in result.get("checks", []):
@@ -51,10 +55,20 @@ for item in result.get("checks", []):
     print(f"[CHECK] {prefix} {item.get('code')}: {item.get('message')}")
 
 if not result.get("ready"):
+    failed = {item.get("code"): item.get("message", "") for item in result.get("checks", []) if not item.get("ok")}
+    if "provisioning_token_valid" in failed:
+        print("[CHECK] ACTION: refresh AOC_PROVISIONING_TOKEN in .env from the AOC UI for this environment, then rerun ./run.sh --local.")
+    if "language_model_missing_artifacts" in failed:
+        print("[CHECK] ACTION: rerun ./push.sh --local so the linked language model is published with the required artifacts.")
     sys.exit(1)
 
 print("[CHECK] Ready to run HelloWorld.")
 PY
+  then
+    error "HelloWorld preflight failed."
+    error "See the failed check and action lines above, then rerun ./run.sh --local."
+    exit 1
+  fi
 }
 
 pick_anchor() {
