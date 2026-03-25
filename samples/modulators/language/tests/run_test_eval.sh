@@ -3,10 +3,10 @@ set -euo pipefail
 
 # === Usage ===
 # ./run_test_eval.sh [MODEL_NAME] [MAX_STEPS]
-# Example: ./run_test_eval.sh gpt2 20
-#          ./run_test_eval.sh google/flan-t5-small 10
+# Example: ./run_test_eval.sh Qwen/Qwen2.5-0.5B-Instruct 10
+#          ./run_test_eval.sh gpt2 20
 
-MODEL="${1:-gpt2}"
+MODEL="${1:-Qwen/Qwen2.5-0.5B-Instruct}"
 STEPS="${2:-10}"
 
 # Optional: Hugging Face token (recommended for private or gated models)

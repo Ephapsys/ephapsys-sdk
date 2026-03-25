@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Trainer script for Language models (e.g., Flan-T5) with ephaptic coupling integration.
+Trainer script for Language models (e.g., Qwen, Gemma, GPT-2) with ephaptic coupling integration.
 
 This trainer streams per-step metrics (accuracy, loss, perplexity) back to the AOC,
 so the frontend UI can render live charts during evaluation.
@@ -21,7 +21,7 @@ Before starting a job in the UI:
 1. Create a Model Template (via the Create Model page):
    - Source: External repository
    - Provider: Hugging Face
-   - Repository ID: google/flan-t5-small, google/gemma-3-270m, openai-community/gpt2
+   - Repository ID: Qwen/Qwen2.5-0.5B-Instruct, google/gemma-3-270m, openai-community/gpt2
    - Model Kind: language
    - Revision: main
    - Hugging Face Token: hf_xxxxxxxx

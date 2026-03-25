@@ -4,9 +4,20 @@ from pathlib import Path
 
 # Where session state is stored
 STATE_FILE = Path.home() / ".ephapsys_state" / "session.json"
-# Backend base URL (point to our deployed API)
-# FIXME: THIS SHOULD BE HARDCODED AND NOT RETRIEVED FROM .ENV FILE
-API_URL = os.getenv("EPHAPSYS_API_URL", "http://localhost:7001")
+DEFAULT_API_URL = "https://api.ephapsys.com"
+
+
+def get_api_url(base_url: str = None) -> str:
+    return (
+        base_url
+        or os.getenv("AOC_BASE_URL")
+        or os.getenv("AOC_API_URL")
+        or os.getenv("EPHAPSYS_API_URL")
+        or DEFAULT_API_URL
+    )
+
+
+API_URL = get_api_url()
 
 def _ensure_state_dir():
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -27,19 +38,20 @@ def get_token():
     sess = load_session()
     return sess.get("token")
 
-def login(username: str = None, password: str = None) -> str:
+def login(username: str = None, password: str = None, base_url: str = None) -> str:
     """
     Authenticate against /cli/login and store JWT in session.json.
     """
+    api_url = get_api_url(base_url)
     username = username or input("Username: ")
     password = password or getpass.getpass("Password: ")
     try:
-        resp = requests.post(f"{API_URL}/cli/login", json={
+        resp = requests.post(f"{api_url}/cli/login", json={
             "username": username,
             "password": password,
         })
     except requests.RequestException as e:
-        raise SystemExit(f"❌ Failed to reach {API_URL}/cli/login: {e}")
+        raise SystemExit(f"❌ Failed to reach {api_url}/cli/login: {e}")
 
     if resp.status_code != 200:
         detail = ""
@@ -53,6 +65,7 @@ def login(username: str = None, password: str = None) -> str:
         raise SystemExit(msg)
 
     data = resp.json()
+    data["base_url"] = api_url
     save_session(data)
     print(f"✅ Logged in as {username}")
     return data["token"]

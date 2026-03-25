@@ -18,9 +18,9 @@ try:
 except PackageNotFoundError:
     __version__ = "0.0.0"
 
-from . import TrustedAgent, ModulatorClient
+from . import TrustedAgent
 from .manifest import export_agent_manifest
-from .session import login as sdk_login, auth_headers, API_URL
+from .session import login as sdk_login, auth_headers, get_api_url
 from .auth import get_api_key as resolve_api_key
 
 
@@ -28,20 +28,27 @@ from .auth import get_api_key as resolve_api_key
 def _env(name: str, default: Optional[str]=None) -> Optional[str]:
     return os.getenv(name, default)
 
-# FIXME: BASE URL SHOULD BE HARDCODED AND NOT RETRIEVED AS AN .ENV
 def _get_base_url(args): 
-    return getattr(args, "base_url", None) or _env("AOC_BASE_URL", _env("AOC_API_URL", "http://localhost:7001"))
+    return get_api_url(getattr(args, "base_url", None))
 
 def _get_api_key(args): 
-    explicit = getattr(args, "api_key", None)
-    if explicit:
-        return explicit
     return resolve_api_key(
         None,
         base_url=_get_base_url(args),
         agent_instance_id=getattr(args, "agent_id", None),
         verify_ssl=_env("AOC_VERIFY_SSL", "1") != "0",
     )
+
+
+def _get_modulator_client_cls():
+    try:
+        from . import ModulatorClient
+    except ImportError as exc:
+        raise SystemExit(
+            "[error] tune commands require optional modulation dependencies. "
+            "Install with: pip install 'ephapsys[modulation]'"
+        ) from exc
+    return ModulatorClient
 
 def print_table(items, headers):
     if not items:
@@ -57,7 +64,7 @@ def print_table(items, headers):
 
 # ---------------- Login ----------------
 def do_login(args):
-    sdk_login(args.username, args.password)
+    sdk_login(args.username, args.password, base_url=_get_base_url(args))
     return 0
 
 # ---------------- Agent commands ----------------
@@ -116,7 +123,7 @@ def do_agent_export_manifest(args):
     print(json.dumps(res, indent=2)); return 0
 
 def do_agent_list(args):
-    resp = requests.get(f"{API_URL}/cli/agents/list", headers=auth_headers())
+    resp = requests.get(f"{_get_base_url(args)}/cli/agents/list", headers=auth_headers())
     if resp.status_code != 200:
         print(f"[error] {resp.text}", file=sys.stderr)
         return 1
@@ -183,7 +190,7 @@ def do_agent_create_template(args):
 
 # ---------------- Modulation commands ----------------
 def do_mod_start(args):
-    mod = ModulatorClient(_get_base_url(args), _get_api_key(args))
+    mod = _get_modulator_client_cls()(_get_base_url(args), _get_api_key(args))
     search = json.loads(args.search_space) if args.search_space else {}
     kpi = json.loads(args.kpi) if args.kpi else {}
     resp = mod.start_job(
@@ -197,19 +204,19 @@ def do_mod_start(args):
     print(json.dumps(resp, indent=2)); return 0
 
 def do_mod_metrics(args):
-    mod = ModulatorClient(_get_base_url(args), _get_api_key(args))
+    mod = _get_modulator_client_cls()(_get_base_url(args), _get_api_key(args))
     metrics = json.loads(args.metrics)
     resp = mod.report_metrics(args.job_id, metrics)
     print(json.dumps(resp or {"ok": True}, indent=2)); return 0
 
 def do_mod_next(args):
-    mod = ModulatorClient(_get_base_url(args), _get_api_key(args))
+    mod = _get_modulator_client_cls()(_get_base_url(args), _get_api_key(args))
     last = json.loads(args.last_metrics) if args.last_metrics else None
     resp = mod.next(args.job_id, last)
     print(json.dumps(resp, indent=2)); return 0
 
 def do_mod_complete(args):
-    mod = ModulatorClient(_get_base_url(args), _get_api_key(args))
+    mod = _get_modulator_client_cls()(_get_base_url(args), _get_api_key(args))
     arts = json.loads(args.artifacts) if args.artifacts else {}
     resp = mod.complete_job(args.job_id, artifact_urls=arts, ecm_digest=args.ecm_digest)
     print(json.dumps(resp, indent=2)); return 0
@@ -287,7 +294,7 @@ def do_model_register(args):
     # ---- Execute ----
     print(f"[info] registering {len(args.ids)} model(s) with provider={args.provider} ...")
 
-    resp = requests.post(f"{API_URL}/cli/models/register",
+    resp = requests.post(f"{_get_base_url(args)}/cli/models/register",
                          json=body, headers=auth_headers())
     if resp.status_code != 200:
         print(f"[error] {resp.text}", file=sys.stderr)
@@ -300,7 +307,7 @@ def do_model_register(args):
 
 
 def do_model_list(args):
-    resp = requests.get(f"{API_URL}/cli/models/list", headers=auth_headers())
+    resp = requests.get(f"{_get_base_url(args)}/cli/models/list", headers=auth_headers())
     if resp.status_code != 200:
         print(f"[error] {resp.text}", file=sys.stderr)
         return 1
@@ -317,7 +324,7 @@ def do_model_list(args):
 
 
 def do_model_remove(args):
-    url = f"{API_URL}/cli/models/remove/{args.provider}/{args.id}"
+    url = f"{_get_base_url(args)}/cli/models/remove/{args.provider}/{args.id}"
     resp = requests.delete(url, headers=auth_headers())
     if resp.status_code != 200:
         print(f"[error] {resp.text}", file=sys.stderr)
@@ -332,7 +339,6 @@ def build_parser():
         description="Ephapsys CLI – manage agents, models, modulation jobs, and certificates"
     )
     p.add_argument("--base-url", help="AOC base URL (default from AOC_BASE_URL)")
-    p.add_argument("--api-key", help="Bootstrap/runtime token")
     p.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
 
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -432,8 +438,8 @@ def build_parser():
     mrm.set_defaults(func=do_model_remove)
 
     # ---- Modulation commands
-    mod = sub.add_parser("mod", help="Modulation job commands")
-    msub = mod.add_subparsers(dest="sub", required=True)
+    tune = sub.add_parser("tune", help="Modulation job commands")
+    msub = tune.add_subparsers(dest="sub", required=True)
 
     ms = msub.add_parser("start", help="Start a modulation job")
     ms.add_argument("--model-template-id", required=True)

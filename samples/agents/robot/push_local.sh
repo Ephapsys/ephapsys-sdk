@@ -146,7 +146,7 @@ echo "============================================================"
 register_model "huggingface" "microsoft/speecht5_tts" "TTS" "$HF_TOKEN"
 register_model "huggingface" "microsoft/speecht5_hifigan" "vocoder" "$HF_TOKEN"
 register_model "huggingface" "openai/whisper-tiny.en" "STT" "$HF_TOKEN"
-register_model "huggingface" "google/flan-t5-small" "Language" "$HF_TOKEN"
+register_model "huggingface" "Qwen/Qwen2.5-0.5B-Instruct" "Language" "$HF_TOKEN"
 register_model "huggingface" "google/embeddinggemma-300m" "Embedding" "$HF_TOKEN"
 register_model "huggingface" "hustvl/yolos-base" "Vision" "$HF_TOKEN"
 
@@ -432,29 +432,16 @@ MODELS_JSON=$(printf '%s\n' "${MODEL_ENTRIES[@]}" | jq -s .)
 
 tmp_models=$(mktemp)
 echo "$MODELS_JSON" > "$tmp_models"
-echo "[INFO] Creating agent template via CLI..."
-set +e
-RESP=$(ephapsys \
-  --base-url "$AOC_API" \
-  --api-key "$API_TOKEN" \
-  agent create-template \
-  --label "$LABEL" \
-  --models-file "$tmp_models" 2>&1)
-STATUS=$?
-set -e
+echo "[INFO] Creating agent template via API..."
 rm -f "$tmp_models"
-if [[ $STATUS -ne 0 ]]; then
-  echo "$RESP"
-  echo "[WARN] CLI create-template failed; falling back to direct API call"
-  RESP=$(curl -s -X POST "$AOC_API/agents" \
-    -H "Authorization: Bearer ${API_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"label\": \"$LABEL\",
-      \"type\": \"TEMPLATE\",
-      \"models\": $MODELS_JSON
-    }")
-fi
+RESP=$(curl -s -X POST "$AOC_API/agents" \
+  -H "Authorization: Bearer ${API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"label\": \"$LABEL\",
+    \"type\": \"TEMPLATE\",
+    \"models\": $MODELS_JSON
+  }")
 echo "$RESP"
 
 AGENT_ID=$(echo "$RESP" | jq -r '.id // ._id // .ID // .agent.id // .agent.public_id // empty')

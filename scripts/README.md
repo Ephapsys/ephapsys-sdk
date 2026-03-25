@@ -1,6 +1,7 @@
 This folder contains helper shell scripts to build, test, and publish the Ephapsys SDK.
 
 ## Files
+- `setup.sh`: Create a dedicated virtualenv and install the SDK from the local repo, TestPyPI, or PyPI.
 - `publish-sdk.sh`: Build and upload the SDK to TestPyPI or PyPI. Supports:
   - `--dev` – local rebuild + reinstall (delegates to `cleanup-sdk.sh`).
   - `--stag` – build + upload to TestPyPI (auto-bumps patch unless `PUBLISH_VERSION` is set). Alias: `--staging`.
@@ -10,6 +11,12 @@ This folder contains helper shell scripts to build, test, and publish the Ephaps
 ## Usage
 From this directory:
 ```bash
+# Install a clean SDK test environment from TestPyPI
+./setup.sh --testpypi --version 0.2.21
+
+# Install from the local repo in editable mode
+./setup.sh --local
+
 # Local rebuild/install
 ./publish-sdk.sh --dev
 
