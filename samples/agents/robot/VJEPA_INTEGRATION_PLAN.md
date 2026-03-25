@@ -302,23 +302,29 @@ ROBOT_VJEPA_MODEL_ID=facebook/vjepa2-vitl-fpc64-256
 ROBOT_VISION_MODE=idempotent   # later: modulated
 ```
 
-## External Evaluation Task Alignment
+## Evaluation Task
 
-We should align the robot/V-JEPA work with the following evaluation task:
+A practical external evaluation track for V-JEPA should use the public
+`facebookresearch/vjepa2` repo and focus on a small, demoable set of
+modifications.
 
-> Fork `https://github.com/facebookresearch/vjepa2`
->
-> On your own GitHub page (keep the fork public) and evaluate it with your own
-> minor modifications with daily commits (please use VS Code with Codex or
-> Claude plugins to assist you) to prepare a 1-slide report and demo for 04/01.
-> The demo must showcase the world model using a live webcam feed to perform
-> real-time video recognition (e.g., action recognition or interaction
-> detection). You will walk us through the forked repo code, your modifications,
-> and the live demo, all under 30 minutes. Since V-JEPA 2 is VRAM-heavy, if you
-> don't have a 24GB GPU locally, you should use your personal email to get GCP’s
-> $300 personal trial (L4/A100 instance) or Lightning AI. If you are sticking to
-> the free tier of Colab or Kaggle (16GB), please use the ViT-B (Base) backbone
-> to avoid OOM errors.
+Suggested task:
+
+1. Fork `https://github.com/facebookresearch/vjepa2`.
+2. Make a small set of modifications around:
+   - live webcam inference
+   - real-time video recognition or interaction detection
+   - clearer demo/runtime ergonomics
+3. Prepare a short demo and summary of:
+   - what was changed
+   - how the world model behaves in live webcam mode
+   - what parts are most relevant to eventual Ephapsys integration
+
+Because V-JEPA 2 is VRAM-heavy, the evaluation path should assume:
+
+- a larger GPU if available for the heavier checkpoints
+- or a smaller **ViT-B** configuration when running in more constrained
+  environments
 
 ### What this implies for our integration plan
 
@@ -333,19 +339,13 @@ We should align the robot/V-JEPA work with the following evaluation task:
 
 ### Track A: External fork evaluation
 
-Owner task:
-
-1. Fork `facebookresearch/vjepa2` publicly.
-2. Keep daily commits showing incremental understanding and modifications.
-3. Add minor changes around:
+1. Fork `facebookresearch/vjepa2`.
+2. Add small changes around:
    - webcam inference
    - real-time recognition/demo UX
    - logging/visualization
-   - deployment/runtime ergonomics
-4. Prepare:
-   - a 1-slide report
-   - a sub-30-minute walkthrough
-   - a live webcam demo
+   - runtime ergonomics
+3. Capture the resulting evaluation setup and outcomes.
 
 ### Track B: Ephapsys robot integration
 
@@ -360,8 +360,7 @@ In parallel, we use what is learned from the fork to shape:
 ### Preferred
 
 - local 24 GB GPU, or
-- GCP trial with L4/A100, or
-- Lightning AI
+- comparable cloud GPU access
 
 ### Acceptable constrained fallback
 
