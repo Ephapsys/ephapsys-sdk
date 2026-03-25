@@ -6,7 +6,7 @@ Each modulation (also referred to as trainer) follows the same structure adapted
 For modulation/training scripts:
 
 ```bash
-pip install "ephapsys[modulation]"
+pip install ephapsys
 ```
 
 If you also run full local evaluation/report pipelines (BLEU/ROUGE/BERTScore/etc.), use:

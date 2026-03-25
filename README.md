@@ -23,7 +23,7 @@ pip install ephapsys
 
 Optional feature groups:
 ```bash
-pip install "ephapsys[modulation]"      # torch/transformers + modulation dependencies
+pip install ephapsys                    # default runtime + language/modulation stack
 pip install "ephapsys[audio]"           # audio I/O/runtime helpers
 pip install "ephapsys[eval]"            # evaluation toolchain
 pip install "ephapsys[vision]"          # vision/camera stack
@@ -43,10 +43,10 @@ Choose the profile by workload:
 | Workload | Install command |
 |---|---|
 | Lightweight orchestrator/proxy only | `pip install ephapsys` |
-| Agent runtime (HelloWorld language) | `pip install "ephapsys[modulation]"` |
+| Agent runtime (HelloWorld language) | `pip install ephapsys` |
 | Agent runtime (Robot multimodal) | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
 | Agent runtime (GGUF / llama.cpp edge CPU) | `pip install ephapsys` + install `llama-cpp-python` or `llama-cli` |
-| Modulators/training scripts | `pip install "ephapsys[modulation]"` |
+| Modulators/training scripts | `pip install ephapsys` |
 | Modulators with full evaluation/report stack | `pip install "ephapsys[all]"` |
 
 ## Quickstart (Python)
@@ -152,6 +152,7 @@ Notes:
 - on rerun, `quickstart.sh` prefers existing HelloWorld starter templates first and only falls back to `./push.sh --local` if they are missing.
 - `AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI. `./push.sh` can write template IDs back into `.env`, but it does not create or refresh provisioning credentials for you.
 - `run.sh --local` is the public local entrypoint and already runs preflight automatically before launch.
+- `run.sh --local` uses the currently installed SDK in your active Python environment. For internal repo development only, set `HELLOWORLD_USE_LOCAL_SDK=1` to install from the local checkout instead.
 - `run_local.sh` still exists as the underlying helper, but `run.sh` is the supported entrypoint.
 - `push.sh` defaults to idempotent publish for the HelloWorld starter path; use `--no-idempotent` if you explicitly want a full modulation run.
 - the default HelloWorld language model is `Qwen/Qwen2.5-0.5B-Instruct`.

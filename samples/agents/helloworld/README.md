@@ -65,11 +65,11 @@ cp .env.example .env
 ```
 
 `run.sh --local` now does the local bootstrap work for you via `run_local.sh`:
-- creates `.venv` automatically if needed
-- installs the local SDK with `modulation` extras if it is not already available
 - chooses `PERSONALIZE_ANCHOR=none` on macOS or machines without TPM tooling
 - chooses `PERSONALIZE_ANCHOR=tpm` on Linux when `tpm2-tools` is available
 - runs the backend preflight automatically before launching the sample
+- uses the SDK already installed in your active Python environment by default
+- supports repo-local SDK development only when you opt in with `HELLOWORLD_USE_LOCAL_SDK=1`
 
 Before the final command, edit `.env` and set:
 - `AOC_BASE_URL` (`AOC_API_URL` is still accepted as a compatibility alias)
@@ -143,8 +143,16 @@ Complete the checklist below after publishing the new SDK and redeploying the AO
 2. `quickstart.sh` first looks for existing HelloWorld starter templates in AOC and writes `MODEL_TEMPLATE_ID` / `AGENT_TEMPLATE_ID` into `.env` when found.
 3. If the starter templates do not exist yet, `quickstart.sh` falls back to `./push.sh --local`, then writes the resulting IDs into `.env`.
 4. It then launches `./run.sh --local`.
-5. On first run, `run.sh --local` creates `.venv` and installs the local SDK with `modulation` extras automatically via `run_local.sh`.
-5. For GGUF/llama.cpp CPU runtime, also install either `llama-cpp-python` or a `llama-cli` binary.
+5. Ensure the SDK is already installed in your active Python environment, for example with `pip install ephapsys` or the `scripts/use-sdk.sh` helper.
+6. For GGUF/llama.cpp CPU runtime, also install either `llama-cpp-python` or a `llama-cli` binary.
+
+Internal repo development only:
+
+```bash
+HELLOWORLD_USE_LOCAL_SDK=1 ./run.sh --local
+```
+
+That opt-in path creates `.venv` if needed and installs the SDK from the local checkout instead of the published package.
 
 ### GCP VM
 
