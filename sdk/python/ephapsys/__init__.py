@@ -17,11 +17,10 @@ def __getattr__(name):
         except ImportError as exc:
             raise ImportError(
                 "ModulatorClient requires optional modulation dependencies. "
-                "Install with: pip install 'ephapsys[modulation]'"
+                "Install with: pip install ephapsys"
             ) from exc
         return _ModulatorClient
     if name == "A2AClient":
         from .a2a import A2AClient as _A2AClient
         return _A2AClient
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-

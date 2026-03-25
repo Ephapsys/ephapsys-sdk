@@ -1932,6 +1932,7 @@ class TrustedAgent:
         timeout_s = float(os.getenv("AOC_DOWNLOAD_TIMEOUT", "60"))
         chunk_size = max(8 * 1024, int(os.getenv("AOC_DOWNLOAD_CHUNK_KB", "256")) * 1024)
         progress_enabled = os.getenv("AOC_DOWNLOAD_PROGRESS", "1") != "0"
+        inline_progress = progress_enabled and sys.stdout.isatty()
         progress_step_bytes = max(
             256 * 1024,
             int(float(os.getenv("AOC_DOWNLOAD_PROGRESS_STEP_MB", "5")) * 1024 * 1024),
@@ -1959,20 +1960,30 @@ class TrustedAgent:
                             mbps = (downloaded / (1024 * 1024)) / elapsed
                             if total > 0:
                                 pct = (downloaded * 100.0) / total
-                                print(
+                                line = (
                                     f"[SDK][Download] {dst.name}: {pct:.1f}% "
                                     f"({downloaded}/{total} bytes, {mbps:.2f} MiB/s)"
                                 )
                             else:
-                                print(
+                                line = (
                                     f"[SDK][Download] {dst.name}: {downloaded} bytes "
                                     f"({mbps:.2f} MiB/s)"
                                 )
+                            if inline_progress:
+                                print(f"\r\033[2K{line}", end="", flush=True)
+                            else:
+                                print(line)
                             next_progress += progress_step_bytes
 
                 os.replace(tmp, dst)
                 elapsed = max(0.001, time.time() - started)
                 mbps = (downloaded / (1024 * 1024)) / elapsed
+                if inline_progress:
+                    total_mib = downloaded / (1024 * 1024)
+                    print(
+                        f"\r\033[2K[SDK][Download] {dst.name}: complete "
+                        f"({total_mib:.2f} MiB in {elapsed:.2f}s, {mbps:.2f} MiB/s)"
+                    )
                 logger.info(
                     "[SDK][Download] Completed %s (%.2f MiB in %.2fs, %.2f MiB/s)",
                     dst.name,

@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ephapsys"
-version = "0.2.23"
+version = "0.2.25"
 description = "Ephapsys helps you empower and govern AI agents."
 readme = "README.md"
 authors = [
@@ -20,6 +20,10 @@ dependencies = [
     "requests>=2.31.0",
     "numpy>=1.23",
     "psutil>=5.9.0",
+    "torch>=2.0.0",
+    "transformers>=4.33.0",
+    "datasets>=2.14.0,<3.0.0",
+    "safetensors>=0.4.5",
 ]
 
 [project.license]
@@ -32,12 +36,7 @@ tpm = [
 hsm = [
     "google-cloud-kms>=2.21.0",
 ]
-modulation = [
-    "torch>=2.0.0",
-    "transformers>=4.33.0",
-    "datasets>=2.14.0,<3.0.0",
-    "safetensors>=0.4.5",
-]
+modulation = []
 audio = [
     "librosa>=0.10.2.post1",
     "soundfile>=0.12.1",

@@ -46,7 +46,7 @@ def _get_modulator_client_cls():
     except ImportError as exc:
         raise SystemExit(
             "[error] tune commands require optional modulation dependencies. "
-            "Install with: pip install 'ephapsys[modulation]'"
+            "Install with: pip install ephapsys"
         ) from exc
     return ModulatorClient
 

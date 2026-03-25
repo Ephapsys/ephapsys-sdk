@@ -9,9 +9,9 @@ Use the matching install command before running each sample:
 
 | Sample type | Recommended install |
 |---|---|
-| `agents/helloworld` | `pip install "ephapsys[modulation]"` |
+| `agents/helloworld` | `pip install ephapsys` |
 | `agents/robot` | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
-| `modulators/*` (training/modulation only) | `pip install "ephapsys[modulation]"` |
+| `modulators/*` (training/modulation only) | `pip install ephapsys` |
 | `modulators/*` (full eval/report stack) | `pip install "ephapsys[all]"` |
 
 For `agents/helloworld`, the local wrapper can bootstrap a fresh checkout for you:
