@@ -13,7 +13,7 @@ pip install ephapsys
 
 Optional feature groups:
 ```bash
-pip install "ephapsys[modulation]"
+pip install "ephapsys[modulation]"      # torch/transformers + modulation dependencies
 pip install "ephapsys[audio]"
 pip install "ephapsys[eval]"
 pip install "ephapsys[vision]"      # alias: [video]
@@ -63,7 +63,7 @@ print(agent.run("Hello world", model_kind="language"))
 | Variable              | Description                                         |
 |-----------------------|-----------------------------------------------------|
 | `EPHAPSYS_AGENT_ID`   | Agent ID/label assigned by AOC                      |
-| `AOC_BASE_URL`        | API endpoint, e.g. `http://localhost:8000`          |
+| `AOC_BASE_URL`        | API endpoint, e.g. `https://api.ephapsys.com`       |
 | `AOC_ORG_ID`          | Org identifier (non-secret tenant scope)            |
 | `AOC_PROVISIONING_TOKEN` | Provisioning credential exchanged for short-lived device token |
 | `EPHAPSYS_STORAGE_DIR`| Optional, defaults to `.ephapsys_state`             |
@@ -96,7 +96,7 @@ Start / iterate / complete modulation on **model templates**:
 ```python
 from ephapsys.modulation import ModulatorClient
 
-mod = ModulatorClient(api_base="http://localhost:7001", api_key="dev")
+mod = ModulatorClient(api_base="https://api.ephapsys.com", api_key="dev")
 resp = mod.start_job(
     model_template_id="google/gemma-2b",
     variant="ec-ann",
@@ -169,6 +169,12 @@ Password: ****
 
 This stores a JWT in `~/.ephapsys_state/session.json`.
 
+Use `--base-url` when you want a non-production environment:
+
+```bash
+ephapsys --base-url https://api.staging.ephapsys.ai login
+```
+
 ---
 
 ### 📦 Models
@@ -220,16 +226,16 @@ Other agent commands (`verify`, `enable`, `disable`, `revoke`, `export-manifest`
 
 ```bash
 # Start job
-ephapsys mod start --model-template-id google/gemma-2b --variant ec-ann   --search-space '{"lr":[1e-3,1e-4]}' --kpi '{"accuracy":"max"}'
+ephapsys tune start --model-template-id google/gemma-2b --variant ec-ann   --search-space '{"lr":[1e-3,1e-4]}' --kpi '{"accuracy":"max"}'
 
 # Report metrics
-ephapsys mod metrics --job-id JOB123 --metrics '[{"step":1,"val":0.84}]'
+ephapsys tune metrics --job-id JOB123 --metrics '[{"step":1,"val":0.84}]'
 
 # Request next step
-ephapsys mod next --job-id JOB123 --last-metrics '[{"step":1,"val":0.84}]'
+ephapsys tune next --job-id JOB123 --last-metrics '[{"step":1,"val":0.84}]'
 
 # Complete job
-ephapsys mod complete --job-id JOB123 --artifacts '{"weights":"s3://..."}'
+ephapsys tune complete --job-id JOB123 --artifacts '{"weights":"s3://..."}'
 ```
 
 

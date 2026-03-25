@@ -14,8 +14,18 @@ cd ephapsys-sdk/samples/agents/helloworld
 
 `quickstart.sh` does:
 - `cp .env.example .env` if `.env` is missing, then stops and tells you to fill in the required values first
-- `./push.sh --mode local`
-- `./run_local.sh`
+- checks AOC for existing HelloWorld starter model/agent templates and writes their IDs into `.env` when found
+- falls back to `./push.sh --mode local` only if those starter templates are not available yet
+- `./run.sh --local`
+
+For the default HelloWorld flow, the only values you normally need to set in `.env` before `./quickstart.sh` are:
+- `AOC_BASE_URL`
+- `AOC_ORG_ID`
+- `AOC_PROVISIONING_TOKEN`
+- `AOC_MODULATION_TOKEN`
+
+Leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run. `./quickstart.sh` will first try to reuse existing HelloWorld starter templates, and only call `./push.sh` if it cannot find them.
+Leave `HF_TOKEN` blank unless you switch away from the default public repo (`Qwen/Qwen2.5-0.5B-Instruct`) to a gated or private model.
 
 If you want to bootstrap everything from this sample instead of manually creating a model template, running modulation, and then creating an agent template, use:
 
@@ -23,7 +33,7 @@ If you want to bootstrap everything from this sample instead of manually creatin
 cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
 ./push.sh --mode local
-./run_local.sh
+./run.sh --local
 ```
 
 For GCP-based modulation instead of local modulation:
@@ -33,10 +43,12 @@ For GCP-based modulation instead of local modulation:
 ```
 
 `push.sh` reuses the existing language modulator sample and automates this sequence:
-- resolve or register the canonical HelloWorld language model template (`google/flan-t5-small` by default)
-- modulate it locally or on GCP
+- resolve or register the canonical HelloWorld language model template (`Qwen/Qwen2.5-0.5B-Instruct` by default)
+- idempotently publish it by default, or run full modulation locally or on GCP when requested
 - create or reuse a HelloWorld agent template bound to that model
 - write `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` back into `.env`
+
+By default, `push.sh` now uses idempotent publish mode for the HelloWorld starter path. Use `--no-idempotent` if you explicitly want a full local or GCP modulation run.
 
 If you already have:
 - an Ephapsys org ID
@@ -48,40 +60,30 @@ then the shortest path is:
 ```bash
 cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
-./run_local.sh
+./run.sh --local
 ```
 
-`run_local.sh` now does the local bootstrap work for you:
+`run.sh --local` now does the local bootstrap work for you via `run_local.sh`:
 - creates `.venv` automatically if needed
 - installs the local SDK with `modulation` extras if it is not already available
 - chooses `PERSONALIZE_ANCHOR=none` on macOS or machines without TPM tooling
 - chooses `PERSONALIZE_ANCHOR=tpm` on Linux when `tpm2-tools` is available
 - runs the backend preflight automatically before launching the sample
-- still supports `./run_local.sh check` if you want the preflight without launching
+- still supports `./run.sh --local check` if you want the preflight without launching
 
 Before the final command, edit `.env` and set:
 - `AOC_BASE_URL` (`AOC_API_URL` is still accepted as a compatibility alias)
 - `AOC_ORG_ID`
 - `AOC_PROVISIONING_TOKEN`
 - `AOC_MODULATION_TOKEN` if you plan to use `./push.sh`
-- `AGENT_TEMPLATE_ID`
+- `AGENT_TEMPLATE_ID` only if you are skipping `./push.sh` and already have an existing template
 
 > ⚠️ **Important Requirements Before Running**  
-> This demo will not work out of the box unless you first prepare your Ephapsys environment:  
-> 
-> 1. **Ephapsys Account & Credentials**  
->    - You must have an active Ephapsys account.  
->    - Get `AOC_ORG_ID` + `AOC_PROVISIONING_TOKEN` from AOC.  
-> 
-> 2. **Model Modulation**  
->    - At least a **Language model** must be modulated in the AOC (for HelloWorld).  Look into **'modulators** folder for an example.
->    - Without modulation, the TrustedAgent will not be able to fetch runtime artifacts.  
-> 
-> 3. **Agent Template**  
->    - You must create an Agent Template in the AOC that references the modulated Language model.  
->    - Note the template ID and configure it in your `.env` or environment variables.  
-> 
-> If these steps are not completed, the HelloWorld agent will fail with verification or runtime errors (e.g., 404 Agent Not Found, missing models).
+> This demo still requires a real Ephapsys organization plus valid tokens.  
+> The difference is that `./push.sh` can now bootstrap the default HelloWorld model template and agent template for you.
+>
+> If you use `./quickstart.sh` or `./push.sh`, you do **not** need to manually create the modulated language model or the agent template first.
+> If you skip `./push.sh` and go straight to `./run.sh --local`, then you must already have a valid `AGENT_TEMPLATE_ID` pointing at a published language model.
 
 ---
 
@@ -103,11 +105,11 @@ Before the final command, edit `.env` and set:
 
 Use this order for the least friction:
 
-1. Modulate one language model in AOC.
-2. Create one agent template in AOC that references that model.
-3. Copy `.env.example` to `.env`.
-4. Fill in `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
-5. Run `./run_local.sh`.
+1. Copy `.env.example` to `.env`.
+2. Fill in `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AOC_MODULATION_TOKEN`.
+3. Leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run.
+4. Run `./quickstart.sh`.
+5. If you want to rerun the agent later without rebuilding assets, run `./run.sh --local`.
 
 If startup fails, check these first:
 - `404 Agent template not found`: `AGENT_TEMPLATE_ID` is wrong or the template does not exist in that AOC environment.
@@ -116,31 +118,32 @@ If startup fails, check these first:
 - Runtime preparation failure: the template exists, but the language model was not modulated or published correctly.
 - Personalization failure on a laptop: set `PERSONALIZE_ANCHOR=none` unless you explicitly want TPM/HSM flow.
 
-### Before you run `run_gcp.sh`
+### Before you run `run.sh --gcp`
 Complete the checklist below after publishing the new SDK and redeploying the AOC backend:
 
 1. **Modulated model + agent template** – Ensure the model you want is modulated in AOC and bound to an agent template; capture the template ID for `.env.*`.
 2. **API credentials** – Keep your usual `.env`, `.env.stag`, and `.env.prod` files up to date in your local/deployment environment. These files are intentionally not tracked in git.
-3. **gcloud access** – Run `gcloud auth login` (or `gcloud auth application-default login`) on the machine invoking `run_gcp.sh` and make sure you can `gcloud compute ssh` into the target project/zone.
+3. **gcloud access** – Run `gcloud auth login` (or `gcloud auth application-default login`) on the machine invoking `run.sh --gcp` and make sure you can `gcloud compute ssh` into the target project/zone.
 4. **Compute IAM** – The user running `gcloud` needs `roles/compute.instanceAdmin.v1`. Use `./check_iam_role.sh --project <project> --member user:<you>` (or grant the role via Cloud Console).
 5. **Cloud KMS key (only if `PERSONALIZE_ANCHOR=hsm`)**
    - If you already have a key, set `HSM_KMS_KEY` (and optionally `HSM_KMS_CREDENTIALS`) in `.env.stag`/`.env.prod`.
-   - Otherwise do nothing—`run_gcp.sh` will automatically call `./provision_kms_key.sh` (using the default Compute Engine service account or the one you specify via `COMPUTE_SERVICE_ACCOUNT`) and capture the resulting `HSM_KMS_KEY` for you.
+   - Otherwise do nothing—`run.sh --gcp` will automatically call `./provision_kms_key.sh` (using the default Compute Engine service account or the one you specify via `COMPUTE_SERVICE_ACCOUNT`) and capture the resulting `HSM_KMS_KEY` for you.
 6. **Vendor HSM (non-GCP)** – Skip the KMS step, set `HSM_HELPER="<your helper command>"`, and export whatever PKCS#11/KMIP env vars the helper requires; confirm it prints valid JSON when invoked with a nonce.
 7. **Local `.env` sanity check** – Run `grep -v '^#' .env.stag` (or `.env.prod`) on your local copy and verify no required variable is blank.
 
 ### Local
 
-1. Copy `.env.example` to `.env` and fill in `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AGENT_TEMPLATE_ID`.
-2. Execute `./run_local.sh check`.
-3. Execute `./run_local.sh`.
-4. On first run, the script creates `.venv` and installs the local SDK with `modulation` extras automatically.
+1. Recommended first run: execute `./quickstart.sh`.
+2. `quickstart.sh` first looks for existing HelloWorld starter templates in AOC and writes `MODEL_TEMPLATE_ID` / `AGENT_TEMPLATE_ID` into `.env` when found.
+3. If the starter templates do not exist yet, `quickstart.sh` falls back to `./push.sh --mode local`, then writes the resulting IDs into `.env`.
+4. It then launches `./run.sh --local`.
+5. On first run, `run.sh --local` creates `.venv` and installs the local SDK with `modulation` extras automatically via `run_local.sh`.
 5. For GGUF/llama.cpp CPU runtime, also install either `llama-cpp-python` or a `llama-cli` binary.
 
 ### GCP VM
 
 1. Populate `.env.stag` or `.env.prod` with the appropriate credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, `AGENT_TEMPLATE_ID`)—both set `PERSONALIZE_ANCHOR=tpm` by default.
-2. Run `./run_gcp.sh --staging` or `./run_gcp.sh --production`. The script:
+2. Run `./run.sh --gcp --staging` or `./run.sh --gcp --production`. The script:
    - Reads the chosen `.env.*` before naming the VM so the hostname reflects the anchor (e.g., `hello-agent-<ts>-tpm`).
    - Creates a Shielded VM with vTPM enabled (required for TPM anchors).
    - Installs the SDK + deps, pins NumPy `<2`, sets up `tpm2-tools`, and starts the bot via `nohup … >> helloworld.log`.
@@ -163,7 +166,7 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
    ```
    Optional overrides: `HSM_KMS_LOCATION` (default `us-central1`), `HSM_KMS_KEY_RING` (default `agents`), `HSM_KMS_KEY_NAME` (default `helloworld`), `HSM_KMS_USE_HSM=1` (forces `--protection-level=hsm` when auto-provisioning), and `COMPUTE_SERVICE_ACCOUNT` if you don’t want to use the project’s default Compute Engine service account.
    > Not on Google Cloud? Leave the `HSM_KMS_*` vars empty, set `HSM_HELPER` to the command that talks to your HSM (for example, a PKCS#11-based helper), and configure whatever environment variables that helper requires. As long as it prints the evidence JSON expected by the SDK (`sig_b64`, `nonce_b64`, optional cert chain, slot, label), personalization will succeed with any vendor module.
-3. Run `./run_gcp.sh --staging` (or `--production`). If `HSM_KMS_KEY` is blank and no helper is configured, the script automatically provisions the Cloud KMS key (via `provision_kms_key.sh`), grants the Compute Engine service account `roles/cloudkms.signerVerifier`, and then proceeds with deployment. It also skips TPM tooling, uploads any credential JSON into `~/helloworld/.secrets/kms-credentials.json`, rewrites `.env` on the VM so both `HSM_KMS_CREDENTIALS` and `GOOGLE_APPLICATION_CREDENTIALS` point at that path, and prints a `[VM] Personalization anchor=hsm` log so it’s obvious which mode is active.
+3. Run `./run.sh --gcp --staging` (or `--production`). If `HSM_KMS_KEY` is blank and no helper is configured, the script automatically provisions the Cloud KMS key (via `provision_kms_key.sh`), grants the Compute Engine service account `roles/cloudkms.signerVerifier`, and then proceeds with deployment. It also skips TPM tooling, uploads any credential JSON into `~/helloworld/.secrets/kms-credentials.json`, rewrites `.env` on the VM so both `HSM_KMS_CREDENTIALS` and `GOOGLE_APPLICATION_CREDENTIALS` point at that path, and prints a `[VM] Personalization anchor=hsm` log so it’s obvious which mode is active.
 4. `helloworld_agent.py` now calls Google Cloud KMS via `google-cloud-kms` to sign the backend nonce, and `reattach_gcp.sh` can reconnect later without touching TPM-specific flow.
 
 ---
@@ -173,8 +176,9 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 - `helloworld_agent.py` → Minimal TrustedAgent HelloWorld demo.
   - Includes optional commented GGUF/llama.cpp hints; keep default behavior unchanged unless you enable them.
   - Includes optional commented A2A hints using `A2AClient` (send/inbox/ack) for peer-agent messaging.
-- `run_local.sh` → Local convenience wrapper.
-- `run_gcp.sh` → GCP launcher with `--staging/--production`, `--interactive/--no-interactive`, and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
+- `run.sh` → Public entrypoint. Use `--local` for local execution or `--gcp` for VM deployment.
+- `run_local.sh` → Local helper invoked by `run.sh --local`.
+- `run_gcp.sh` → GCP helper invoked by `run.sh --gcp`, with `--staging/--production`, `--interactive/--no-interactive`, and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
 - `reattach_gcp.sh` → Smart reconnection helper. If it detects `helloworld_agent.py` running, it loads `.env`, activates the venv, and drops you into the chatbot. Otherwise it tails `~/helloworld/helloworld.log`.
 - `detach_gcp.sh` → (Legacy) left around in case you revert to tmux; not needed in the default workflow.
 - `check_iam_role.sh` → Quick helper to verify whether the current (or supplied) gcloud account has `roles/compute.instanceAdmin.v1` on the project.

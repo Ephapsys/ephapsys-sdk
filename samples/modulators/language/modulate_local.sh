@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Bash wrapper to run Ephaptic Language Trainer (Flan-T5 / GPT-2)
+# Bash wrapper to run the Ephaptic Language Trainer
 # ============================================================
 
 set -euo pipefail

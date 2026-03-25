@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-USAGE="Usage: $0 [--mode local|gcp] [--gpu t4|a100|a100-2g|a100-4g|a100-8g] [--idempotent] [--force-modulate] [--label LABEL]"
+USAGE="Usage: $0 [--mode local|gcp] [--gpu t4|a100|a100-2g|a100-4g|a100-8g] [--no-idempotent] [--force-modulate] [--label LABEL]"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANG_DIR="$SCRIPT_DIR/../../modulators/language"
@@ -12,7 +12,7 @@ SESSION_FILE="${HOME}/.ephapsys_state/session.json"
 
 MODE="local"
 GPU="t4"
-IDEMPOTENT=0
+IDEMPOTENT=1
 FORCE_MODULATE=0
 SKIP_BUILD_FLAG=""
 SKIP_PUSH_FLAG=""
@@ -59,6 +59,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --idempotent)
       IDEMPOTENT=1
+      shift
+      ;;
+    --no-idempotent)
+      IDEMPOTENT=0
       shift
       ;;
     --force-modulate)
@@ -121,7 +125,7 @@ CLI_API="${AOC_API}/cli"
 ORG_ID="${AOC_ORG_ID:-}"
 API_TOKEN="${API_TOKEN:-${AOC_MODULATION_TOKEN:-}}"
 HF_TOKEN="${HF_TOKEN:-}"
-MODEL_REPO="${HELLOWORLD_MODEL_REPO:-google/flan-t5-small}"
+MODEL_REPO="${HELLOWORLD_MODEL_REPO:-Qwen/Qwen2.5-0.5B-Instruct}"
 MODEL_REVISION="${HELLOWORLD_MODEL_REVISION:-main}"
 MODEL_KIND="${HELLOWORLD_MODEL_KIND:-language}"
 MODEL_NAME="${HELLOWORLD_MODEL_NAME:-HelloWorld Starter Model}"
@@ -172,6 +176,11 @@ cli_login() {
       printf '%s' "$token"
       return
     fi
+  fi
+
+  if [[ ! -t 0 ]]; then
+    error "No valid CLI session found for model registration. Run 'ephapsys login' first, then rerun push.sh."
+    exit 1
   fi
 
   local cli_user cli_pass login_resp
@@ -409,6 +418,6 @@ cat <<EOF
   AGENT_TEMPLATE_ID: ${AGENT_TEMPLATE_ID}
 
 Next:
-  ./run_local.sh check
-  ./run_local.sh
+  ./run.sh --local check
+  ./run.sh --local
 EOF

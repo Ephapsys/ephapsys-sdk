@@ -1,4 +1,4 @@
-# Modulator script for Language (Flan-T5) with ephaptic coupling integration
+# Modulator script for Language models with ephaptic coupling integration
 
 Fine-tuning GPT-2 on WikiText makes sense because both share the same goal — predicting the next word in a sequence. GPT-2 is a causal language model trained for free-form text generation, and WikiText provides high-quality, well-structured English suitable for that purpose. This alignment helps GPT-2 improve its fluency and factual style without changing its fundamental behavior, unlike FLAN-T5, which is tuned for instruction following rather than raw language modeling.
 
@@ -33,7 +33,7 @@ Examples: GPT-2, GPT-Neo, LLaMA, Falcon, etc.
 1. Create a **Model Template** (via the *Create Model* page in the AOC):  
    - **Source:** External repository  
    - **Provider:** Hugging Face  
-   - **Repository ID:** `openai-community/gpt2`, `google/flan-t5-small`, `google/gemma-3-270m`
+   - **Repository ID:** `Qwen/Qwen2.5-0.5B-Instruct`, `openai-community/gpt2`, `google/gemma-3-270m`
    - **Model Kind:** `language`  
    - **Revision:** `main`  
    - **Hugging Face Token:** `hf_xxxxxxxx`  

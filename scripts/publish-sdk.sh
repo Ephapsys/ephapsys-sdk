@@ -69,16 +69,27 @@ if [[ "$VERBOSE" -eq 0 ]]; then
   export PIP_DISABLE_PIP_VERSION_CHECK=1
   PIP_FLAGS+=("-q")
 fi
+TOOLS_VENV="${TOOLS_VENV:-$SCRIPT_DIR/.release-venv}"
+TOOLS_PYTHON="$TOOLS_VENV/bin/python"
+
+ensure_tools_venv() {
+  if [[ ! -x "$TOOLS_PYTHON" ]]; then
+    info "Creating release tooling virtualenv at $TOOLS_VENV"
+    python3 -m venv "$TOOLS_VENV"
+  fi
+  "$TOOLS_PYTHON" -m pip "${PIP_FLAGS[@]}" install -U pip setuptools wheel build twine tomli_w
+}
 
 ensure_toml_writer() {
-  python3 - <<'PY'
+  ensure_tools_venv
+  "$TOOLS_PYTHON" - <<'PY'
 try:
     import tomli_w  # type: ignore
 except ModuleNotFoundError:
     raise SystemExit(1)
 PY
   if [[ $? -ne 0 ]]; then
-    python3 -m pip "${PIP_FLAGS[@]}" install tomli_w >/dev/null 2>&1 || python3 -m pip install tomli_w
+    "$TOOLS_PYTHON" -m pip "${PIP_FLAGS[@]}" install tomli_w >/dev/null 2>&1 || "$TOOLS_PYTHON" -m pip install tomli_w
   fi
 }
 
@@ -102,7 +113,7 @@ write_sdk_version() {
   local new_ver="$1"
   info "Setting version to $new_ver"
   ensure_toml_writer
-  SDK_DIR_ENV="$SDK_DIR" NEW_VER="$new_ver" python3 - <<'PY'
+  SDK_DIR_ENV="$SDK_DIR" NEW_VER="$new_ver" "$TOOLS_PYTHON" - <<'PY'
 import os
 import pathlib
 try:
@@ -354,24 +365,24 @@ run_cleanup() {
 prepare_dist() {
   pushd "$SDK_DIR" >/dev/null
   rm -rf build dist
-  python3 -m pip "${PIP_FLAGS[@]}" install -U pip setuptools wheel build twine
+  ensure_tools_venv
   if [[ "$VERBOSE" -eq 0 ]]; then
     local log
     log="$(mktemp "/tmp/publish-sdk-build.XXXXXX.log")"
-    if ! PYTHONWARNINGS=ignore::DeprecationWarning python3 -m build >"$log" 2>&1; then
+    if ! PYTHONWARNINGS=ignore::DeprecationWarning "$TOOLS_PYTHON" -m build >"$log" 2>&1; then
       warn "Build failed. See $log"
       cat "$log"
       exit 1
     fi
-    if ! PYTHONWARNINGS=ignore::DeprecationWarning python3 -m twine check dist/* >"$log" 2>&1; then
+    if ! PYTHONWARNINGS=ignore::DeprecationWarning "$TOOLS_PYTHON" -m twine check dist/* >"$log" 2>&1; then
       warn "twine check failed. See $log"
       cat "$log"
       exit 1
     fi
     rm -f "$log"
   else
-    python3 -m build
-    python3 -m twine check dist/*
+    "$TOOLS_PYTHON" -m build
+    "$TOOLS_PYTHON" -m twine check dist/*
   fi
   popd >/dev/null
 }
@@ -379,7 +390,8 @@ prepare_dist() {
 upload_dist() {
   local repo_flag="$1"
   pushd "$SDK_DIR" >/dev/null
-  python3 -m twine upload $repo_flag dist/*
+  ensure_tools_venv
+  "$TOOLS_PYTHON" -m twine upload $repo_flag dist/*
   popd >/dev/null
 }
 
