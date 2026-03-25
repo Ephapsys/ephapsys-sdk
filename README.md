@@ -23,7 +23,7 @@ pip install ephapsys
 
 Optional feature groups:
 ```bash
-pip install "ephapsys[modulation]"      # torch/transformers runtime + modulation APIs
+pip install "ephapsys[modulation]"      # torch/transformers + modulation dependencies
 pip install "ephapsys[audio]"           # audio I/O/runtime helpers
 pip install "ephapsys[eval]"            # evaluation toolchain
 pip install "ephapsys[vision]"          # vision/camera stack
@@ -74,27 +74,39 @@ with agent.session(lease_seconds=1800):
 The Ephapsys SDK comes with a built-in CLI that makes configuring, managing, and deploying agents simple and fast.
 
 ```bash
-# Authenticate
-ephapsys login
+# Authenticate once; the CLI stores a session in ~/.ephapsys_state/session.json
+ephapsys login --username your_username
 
-# Upload and list models
-ephapsys models upload ./model.pt --label "Demo Model" --type language --version 1.0
-ephapsys models list
+# Use staging explicitly when needed
+ephapsys --base-url https://api.staging.ephapsys.ai login
 
-# Start / stream / finish a modulation run
-ephapsys modulation start --model-id model:demo --variant multiplicative --epsilon 1.0 --lambda0 0.05
-ephapsys modulation stream --model-id model:demo
-ephapsys modulation finish --model-id model:demo
+# Register and list models
+ephapsys model register --provider huggingface --ids google/gemma-2b
+ephapsys model list
 
-# Assemble and verify an agent
-ephapsys agents create --label "Assistant Suite" --models model:demo
-ephapsys verify --agent-id agent_demo
+# Create and inspect an agent template
+ephapsys agent create-template \
+  --label "Assistant Suite" \
+  --models '[{"id":"google/gemma-2b","config":{"type":"language","policies":{}}}]'
+ephapsys agent list
+
+# Verify and manage an agent
+ephapsys agent verify --agent-id agent_demo
+ephapsys agent enable --agent-id agent_demo
+
+# Start and complete a modulation job
+ephapsys tune start \
+  --model-template-id google/gemma-2b \
+  --variant ec-ann \
+  --search-space '{"lr":[0.001,0.0001]}' \
+  --kpi '{"accuracy":"max"}'
+ephapsys tune complete --job-id job_123 --artifacts '{"report":"./out/report.json"}'
 ```
 
 ## Configuration
 The SDK/CLI read environment variables or a `.env` file:
 ```
-AOC_API_BASE=https://api.ephapsys.com  # Ops Center base URL
+AOC_BASE_URL=https://api.ephapsys.com  # Ops Center base URL
 AOC_ORG_ID=org_xxxxx                   # org identifier
 AOC_PROVISIONING_TOKEN=boot_xxxxx         # provisioning token
 EPHAPSYS_AGENT_ID=agent_demo           # agent identity for TrustedAgent.from_env
@@ -126,20 +138,22 @@ Fastest local HelloWorld path from this repo:
 
 ```bash
 cd samples/agents/helloworld
-cp .env.example .env
-./run_local.sh check
-./run_local.sh
+./quickstart.sh
 ```
 
 Fill in `.env` with:
 - `AOC_BASE_URL` (`AOC_API_URL` remains a compatibility alias)
 - `AOC_ORG_ID`
 - `AOC_PROVISIONING_TOKEN`
-- `AGENT_TEMPLATE_ID`
+- `AOC_MODULATION_TOKEN`
 
 Notes:
-- `run_local.sh` creates `.venv` automatically and installs the local SDK with `modulation` extras on first run.
-- `run_local.sh check` validates the org, provisioning token, agent template, and linked language model before launching the sample.
+- `quickstart.sh` creates `.env` from `.env.example` if needed, then stops so you can fill in the required values.
+- on rerun, `quickstart.sh` prefers existing HelloWorld starter templates first and only falls back to `./push.sh --mode local` if they are missing.
+- `run.sh --local` is the public local entrypoint; `run.sh --local check` runs the preflight without launching.
+- `run_local.sh` still exists as the underlying helper, but `run.sh` is the supported entrypoint.
+- `push.sh` defaults to idempotent publish for the HelloWorld starter path; use `--no-idempotent` if you explicitly want a full modulation run.
+- the default HelloWorld language model is `Qwen/Qwen2.5-0.5B-Instruct`.
 - On macOS and non-TPM machines, the sample defaults to `PERSONALIZE_ANCHOR=none` for a smoother local dev flow.
 - On Linux with `tpm2-tools` installed, the sample defaults to `PERSONALIZE_ANCHOR=tpm`.
 
