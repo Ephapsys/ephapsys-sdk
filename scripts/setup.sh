@@ -109,7 +109,7 @@ if [[ ! -d "$VENV_PATH" ]]; then
 fi
 
 echo "[INFO] Using virtualenv: $VENV_PATH"
-"$PYTHON_BIN" -m pip "${PIP_FLAGS[@]}" install -U pip setuptools wheel
+"$PYTHON_BIN" -m pip "${PIP_FLAGS[@]}" install -U pip "setuptools<82" wheel
 
 PIP_INSTALL_ARGS=()
 if [[ "$FORCE_REINSTALL" -eq 1 ]]; then

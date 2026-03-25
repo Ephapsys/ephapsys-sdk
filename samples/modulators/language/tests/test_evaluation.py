@@ -10,7 +10,7 @@ Terminology clarification:
 
 Usage examples:
   python3 test_evaluation.py --model gpt2 --max_steps 10
-  python3 test_evaluation.py --model Qwen/Qwen2.5-0.5B-Instruct --max_steps 10
+  python3 test_evaluation.py --model Qwen/Qwen3.5-0.8B --max_steps 10
 """
 
 import argparse, math, os, datetime
@@ -229,8 +229,8 @@ def build_docx(model_name, model_type, acc_values, ppl_values, loss_values, bleu
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
-                        help="Model name or HF repo ID (e.g., Qwen/Qwen2.5-0.5B-Instruct, gpt2)")
+    parser.add_argument("--model", type=str, default="Qwen/Qwen3.5-0.8B",
+                        help="Model name or HF repo ID (e.g., Qwen/Qwen3.5-0.8B, gpt2)")
     parser.add_argument("--max_steps", type=int, default=10)
     args = parser.parse_args()
 

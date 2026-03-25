@@ -21,7 +21,7 @@ Before starting a job in the UI:
 1. Create a Model Template (via the Create Model page):
    - Source: External repository
    - Provider: Hugging Face
-   - Repository ID: Qwen/Qwen2.5-0.5B-Instruct, google/gemma-3-270m, openai-community/gpt2
+   - Repository ID: Qwen/Qwen3.5-0.8B, google/gemma-3-270m, openai-community/gpt2
    - Model Kind: language
    - Revision: main
    - Hugging Face Token: hf_xxxxxxxx

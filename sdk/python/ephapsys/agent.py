@@ -3091,7 +3091,15 @@ class TrustedAgent:
             model_cls = AutoModelForCausalLM
 
         state_dict = self._load_model_state_dict(model_path)
-        if state_dict:
+        can_init_from_config = True
+        if getattr(cfg, "text_config", None) is not None and not hasattr(cfg, "vocab_size"):
+            # Some newer multimodal/text-wrapped configs (e.g. Qwen 3.5) keep
+            # text-only fields like vocab_size under text_config, which breaks
+            # AutoModelForCausalLM.from_config(cfg). The local from_pretrained
+            # path already handles these configs correctly.
+            can_init_from_config = False
+
+        if state_dict and can_init_from_config:
             with self._suppress_transformers_warnings():
                 model = model_cls.from_config(cfg)
             # Install ECM hooks/parameters before weights are loaded so state_dict restores λ without warnings
@@ -3103,21 +3111,94 @@ class TrustedAgent:
                 logger.debug("[SDK][Language] Unexpected keys after load: %s", unexpected_keys)
             model.to(self._device())
         else:
-            logger.warning(
-                "[SDK][Language] Could not locate state dict under %s; falling back to from_pretrained",
-                model_path,
-            )
+            if state_dict and not can_init_from_config:
+                logger.debug(
+                    "[SDK][Language] Config %s is not compatible with from_config; using from_pretrained fallback",
+                    cfg.__class__.__name__,
+                )
+            if state_dict:
+                logger.debug(
+                    "[SDK][Language] Using local from_pretrained load path for %s",
+                    model_path,
+                )
+            else:
+                logger.warning(
+                    "[SDK][Language] Could not locate state dict under %s; falling back to from_pretrained",
+                    model_path,
+                )
             with self._suppress_transformers_warnings():
                 model = model_cls.from_pretrained(model_path, config=cfg).to(self._device())
 
         self._apply_ecm_if_available(model, runtime)
 
-        inputs = tok(str(enforced_input), return_tensors="pt").to(self._device())
-        with torch.no_grad():
-            outputs = model.generate(**inputs, max_new_tokens=256)
+        model_cfg = runtime.get("config") or {}
+        generation_cfg = model_cfg.get("generation") or {}
+        use_chat_template = str(
+            generation_cfg.get("chat_template", os.getenv("AOC_LANGUAGE_USE_CHAT_TEMPLATE", "1"))
+        ).strip().lower() not in ("0", "false", "no", "")
 
-        decoded = tok.decode(outputs[0], skip_special_tokens=True)
-        token_count = outputs.shape[1]  # number of tokens generated
+        rendered_prompt = str(enforced_input)
+        if use_chat_template and hasattr(tok, "apply_chat_template"):
+            try:
+                rendered_prompt = tok.apply_chat_template(
+                    [{"role": "user", "content": str(enforced_input)}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            except Exception as exc:
+                logger.debug("[SDK][Language] Chat template skipped: %s", exc)
+
+        if tok.pad_token_id is None and tok.eos_token_id is not None:
+            tok.pad_token = tok.eos_token
+
+        inputs = tok(rendered_prompt, return_tensors="pt").to(self._device())
+        input_tokens = int(inputs["input_ids"].shape[1])
+
+        max_new_tokens = int(
+            generation_cfg.get("max_new_tokens", model_cfg.get("max_new_tokens", os.getenv("AOC_MAX_NEW_TOKENS", "96")))
+        )
+        temperature = float(generation_cfg.get("temperature", model_cfg.get("temperature", 0.7)))
+        top_p = float(generation_cfg.get("top_p", model_cfg.get("top_p", 0.9)))
+        repetition_penalty = float(
+            generation_cfg.get("repetition_penalty", model_cfg.get("repetition_penalty", 1.1))
+        )
+        no_repeat_ngram_size = int(
+            generation_cfg.get("no_repeat_ngram_size", model_cfg.get("no_repeat_ngram_size", 3))
+        )
+        do_sample = str(generation_cfg.get("do_sample", model_cfg.get("do_sample", "1"))).strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "",
+        )
+
+        generate_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "pad_token_id": tok.pad_token_id,
+            "eos_token_id": tok.eos_token_id,
+            "repetition_penalty": repetition_penalty,
+            "no_repeat_ngram_size": no_repeat_ngram_size,
+        }
+        if do_sample:
+            generate_kwargs.update(
+                {
+                    "do_sample": True,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                }
+            )
+        else:
+            generate_kwargs["do_sample"] = False
+
+        with torch.no_grad():
+            outputs = model.generate(**inputs, **generate_kwargs)
+
+        if model_cls is AutoModelForCausalLM:
+            generated_ids = outputs[0][input_tokens:]
+        else:
+            generated_ids = outputs[0]
+        decoded = tok.decode(generated_ids, skip_special_tokens=True).strip()
+        token_count = int(generated_ids.shape[0]) if hasattr(generated_ids, "shape") else outputs.shape[1]
 
         logger.debug("[SDK][Language] Generated raw: %s%s",
                      decoded[:80], "..." if len(decoded) > 80 else "")

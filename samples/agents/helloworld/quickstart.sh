@@ -51,7 +51,7 @@ resolve_existing_templates() {
   local aoc_api api_token model_repo model_kind model_name agent_label
   aoc_api="${AOC_BASE_URL:-${AOC_API_URL:-${AOC_API_BASE:-${AOC_API:-http://localhost:7001}}}}"
   api_token="${API_TOKEN:-${AOC_MODULATION_TOKEN:-}}"
-  model_repo="${HELLOWORLD_MODEL_REPO:-Qwen/Qwen2.5-0.5B-Instruct}"
+  model_repo="${HELLOWORLD_MODEL_REPO:-Qwen/Qwen3.5-0.8B}"
   model_kind="${HELLOWORLD_MODEL_KIND:-language}"
   model_name="${HELLOWORLD_MODEL_NAME:-HelloWorld Starter Model}"
   agent_label="${AGENT_TEMPLATE_NAME:-HelloWorld Agent Template}"
