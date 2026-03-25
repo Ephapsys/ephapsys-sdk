@@ -131,7 +131,7 @@ CLI_API="${AOC_API}/cli"
 ORG_ID="${AOC_ORG_ID:-}"
 API_TOKEN="${API_TOKEN:-${AOC_MODULATION_TOKEN:-}}"
 HF_TOKEN="${HF_TOKEN:-}"
-MODEL_REPO="${HELLOWORLD_MODEL_REPO:-Qwen/Qwen2.5-0.5B-Instruct}"
+MODEL_REPO="${HELLOWORLD_MODEL_REPO:-Qwen/Qwen3.5-0.8B}"
 MODEL_REVISION="${HELLOWORLD_MODEL_REVISION:-main}"
 MODEL_KIND="${HELLOWORLD_MODEL_KIND:-language}"
 MODEL_NAME="${HELLOWORLD_MODEL_NAME:-HelloWorld Starter Model}"
@@ -141,7 +141,7 @@ DEFAULT_POLICY_JSON='[{"type":"output_moderation","value":{"categories":["self-h
 
 model_size_label() {
   case "$MODEL_REPO" in
-    Qwen/Qwen2.5-0.5B-Instruct) printf '0.5B params';;
+    Qwen/Qwen3.5-0.8B) printf '0.8B params';;
     google/flan-t5-small) printf '~80M params';;
     *) printf 'size not annotated';;
   esac

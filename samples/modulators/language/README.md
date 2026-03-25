@@ -33,7 +33,7 @@ Examples: GPT-2, GPT-Neo, LLaMA, Falcon, etc.
 1. Create a **Model Template** (via the *Create Model* page in the AOC):  
    - **Source:** External repository  
    - **Provider:** Hugging Face  
-   - **Repository ID:** `Qwen/Qwen2.5-0.5B-Instruct`, `openai-community/gpt2`, `google/gemma-3-270m`
+   - **Repository ID:** `Qwen/Qwen3.5-0.8B`, `openai-community/gpt2`, `google/gemma-3-270m`
    - **Model Kind:** `language`  
    - **Revision:** `main`  
    - **Hugging Face Token:** `hf_xxxxxxxx`  

@@ -25,7 +25,7 @@ For the default HelloWorld flow, the only values you normally need to set in `.e
 - `AOC_MODULATION_TOKEN`
 
 Leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run. `./quickstart.sh` will first try to reuse existing HelloWorld starter templates, and only call `./push.sh` if it cannot find them.
-Leave `HF_TOKEN` blank unless you switch away from the default public repo (`Qwen/Qwen2.5-0.5B-Instruct`) to a gated or private model.
+Leave `HF_TOKEN` blank unless you switch away from the default public repo (`Qwen/Qwen3.5-0.8B`) to a gated or private model.
 `AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI. `./push.sh` can bootstrap the model and agent template IDs, but it does not create or refresh provisioning credentials.
 
 If you want to bootstrap everything from this sample instead of manually creating a model template, running modulation, and then creating an agent template, use:
@@ -44,7 +44,7 @@ For GCP-based modulation instead of local modulation:
 ```
 
 `push.sh` reuses the existing language modulator sample and automates this sequence:
-- resolve or register the canonical HelloWorld language model template (`Qwen/Qwen2.5-0.5B-Instruct` by default)
+- resolve or register the canonical HelloWorld language model template (`Qwen/Qwen3.5-0.8B` by default)
 - idempotently publish it by default, or run full modulation locally or on GCP when requested
 - create or reuse a HelloWorld agent template bound to that model
 - write `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` back into `.env`
