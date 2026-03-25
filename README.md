@@ -155,7 +155,7 @@ Notes:
 - `run.sh --local` uses the currently installed SDK in your active Python environment. For internal repo development only, set `HELLOWORLD_USE_LOCAL_SDK=1` to install from the local checkout instead.
 - `run_local.sh` still exists as the underlying helper, but `run.sh` is the supported entrypoint.
 - `push.sh` defaults to idempotent publish for the HelloWorld starter path; use `--no-idempotent` if you explicitly want a full modulation run.
-- the default HelloWorld language model is `Qwen/Qwen2.5-0.5B-Instruct`.
+- the default HelloWorld language model is `Qwen/Qwen3.5-0.8B`.
 - On macOS and non-TPM machines, the sample defaults to `PERSONALIZE_ANCHOR=none` for a smoother local dev flow.
 - On Linux with `tpm2-tools` installed, the sample defaults to `PERSONALIZE_ANCHOR=tpm`.
 

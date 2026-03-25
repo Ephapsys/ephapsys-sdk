@@ -146,7 +146,7 @@ echo "============================================================"
 register_model "huggingface" "microsoft/speecht5_tts" "TTS" "$HF_TOKEN"
 register_model "huggingface" "microsoft/speecht5_hifigan" "vocoder" "$HF_TOKEN"
 register_model "huggingface" "openai/whisper-tiny.en" "STT" "$HF_TOKEN"
-register_model "huggingface" "Qwen/Qwen2.5-0.5B-Instruct" "Language" "$HF_TOKEN"
+register_model "huggingface" "Qwen/Qwen3.5-0.8B" "Language" "$HF_TOKEN"
 register_model "huggingface" "google/embeddinggemma-300m" "Embedding" "$HF_TOKEN"
 register_model "huggingface" "hustvl/yolos-base" "Vision" "$HF_TOKEN"
 
