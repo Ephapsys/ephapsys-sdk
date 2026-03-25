@@ -122,27 +122,33 @@ if [ -z "$ORG_ID" ] || [ -z "$BOOTSTRAP_TOKEN" ]; then
   exit 1
 fi
 
-VENV="${HELLOWORLD_VENV:-.venv}"
-if [ ! -d "$VENV" ]; then
-  info "Creating local virtualenv at $VENV"
-  python3 -m venv "$VENV"
-fi
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
-
 SDK_PATH="../../../sdk/python"
 if ! python3 -c "import ephapsys, transformers" >/dev/null 2>&1; then
-  if [ "${HELLOWORLD_AUTO_INSTALL:-1}" = "1" ]; then
+  if [ "${HELLOWORLD_USE_LOCAL_SDK:-0}" = "1" ]; then
+    VENV="${HELLOWORLD_VENV:-.venv}"
+    if [ ! -d "$VENV" ]; then
+      info "Creating local virtualenv at $VENV"
+      python3 -m venv "$VENV"
+    fi
+    # shellcheck disable=SC1091
+    source "$VENV/bin/activate"
     if [ -d "$SDK_PATH" ]; then
-      info "Installing local Ephapsys SDK + modulation extras into $VENV"
+      info "Installing local Ephapsys SDK + modulation extras from repo into $VENV"
       PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade pip --quiet
       PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -e "${SDK_PATH}[modulation]" --quiet
     else
       error "Ephapsys SDK not installed and local SDK path $SDK_PATH was not found."
       exit 1
     fi
+  elif [ "${HELLOWORLD_AUTO_INSTALL:-0}" = "1" ]; then
+    error "Missing runtime dependencies in the current Python environment."
+    error "Install the published SDK first, for example: pip install ephapsys"
+    error "For repo-local development only, rerun with HELLOWORLD_USE_LOCAL_SDK=1."
+    exit 1
   else
-    error "Missing runtime dependencies in $VENV. Run: python3 -m pip install -e \"${SDK_PATH}[modulation]\""
+    error "Missing runtime dependencies in the current Python environment."
+    error "Run: pip install ephapsys"
+    error "For repo-local development only, rerun with HELLOWORLD_USE_LOCAL_SDK=1."
     exit 1
   fi
 fi

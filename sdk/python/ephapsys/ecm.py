@@ -176,8 +176,10 @@ def inject_ecm(module: nn.Module,
         raise ValueError(f"Unknown ecm_init: {ecm_init}")
 
     # Detect device of module and create Λ directly there
-    device = next(module.parameters(), torch.tensor([])).device
-    Lambda = nn.Parameter(torch.tensor(Lambda_np, dtype=torch.float32, device=device), requires_grad=True)
+    module_param = next(module.parameters(), torch.tensor([]))
+    device = module_param.device
+    param_dtype = module_param.dtype if getattr(module_param, "is_floating_point", lambda: False)() else torch.float32
+    Lambda = nn.Parameter(torch.tensor(Lambda_np, dtype=param_dtype, device=device), requires_grad=True)
     module.register_parameter("lambda_ecm", Lambda)
 
     # --- Select nonlinearity φ(x) ---
@@ -220,8 +222,8 @@ def inject_ecm(module: nn.Module,
             return output  # skip if not found
 
         # ✅ Ensure Λ and x are on the same device
-        if Lambda_param.device != x.device:
-            Lambda_param = Lambda_param.to(x.device)
+        if Lambda_param.device != x.device or Lambda_param.dtype != x.dtype:
+            Lambda_param = Lambda_param.to(device=x.device, dtype=x.dtype)
 
         # Compute ephaptic modulation (no dynamic resize anymore)
         coupling = torch.matmul(x, Lambda_param)

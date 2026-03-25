@@ -13,7 +13,7 @@ pip install ephapsys
 
 Optional feature groups:
 ```bash
-pip install "ephapsys[modulation]"      # torch/transformers + modulation dependencies
+pip install ephapsys                    # default runtime + language/modulation stack
 pip install "ephapsys[audio]"
 pip install "ephapsys[eval]"
 pip install "ephapsys[vision]"      # alias: [video]
@@ -33,10 +33,10 @@ Choose the profile by workload:
 | Workload | Install command |
 |---|---|
 | Lightweight orchestrator/proxy only | `pip install ephapsys` |
-| Agent runtime (HelloWorld language) | `pip install "ephapsys[modulation]"` |
+| Agent runtime (HelloWorld language) | `pip install ephapsys` |
 | Agent runtime (Robot multimodal) | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
 | Agent runtime (GGUF / llama.cpp edge CPU) | `pip install ephapsys` + install `llama-cpp-python` or `llama-cli` |
-| Modulators/training scripts | `pip install "ephapsys[modulation]"` |
+| Modulators/training scripts | `pip install ephapsys` |
 | Modulators with full evaluation/report stack | `pip install "ephapsys[all]"` |
 
 ---
