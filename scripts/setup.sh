@@ -14,7 +14,7 @@ Modes:
 
 Options:
   --venv PATH       Virtualenv path. Default: ./venvs/sdk
-  --version VER     Package version for --testpypi or --pypi
+  --version VER     Pin a specific package version for --testpypi or --pypi
   --extras LIST     Extra groups, e.g. modulation or modulation,audio,vision
   --force-reinstall Reinstall even if already present
   --verbose         Show full pip output
@@ -22,6 +22,7 @@ Options:
 
 Examples:
   ./setup.sh --local
+  ./setup.sh --testpypi
   ./setup.sh --testpypi --version 0.2.21
   ./setup.sh --pypi --version 0.2.20 --extras modulation
 
@@ -123,6 +124,79 @@ run_pip_install() {
   fi
 }
 
+resolve_latest_version() {
+  local repo="$1"
+  local url=""
+  case "$repo" in
+    testpypi)
+      url="https://test.pypi.org/pypi/ephapsys/json"
+      ;;
+    pypi)
+      url="https://pypi.org/pypi/ephapsys/json"
+      ;;
+    *)
+      echo "[ERROR] Unknown package index: $repo" >&2
+      exit 1
+      ;;
+  esac
+
+  if command -v curl >/dev/null 2>&1; then
+    local payload
+    payload="$(curl -fsSL "$url")"
+    JSON_PAYLOAD="$payload" python3 - <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ["JSON_PAYLOAD"])
+except Exception as exc:
+    raise SystemExit(f"[ERROR] Failed to parse package metadata JSON: {exc}")
+
+version = (data.get("info") or {}).get("version")
+if not version:
+    raise SystemExit("[ERROR] No version metadata returned by package index")
+print(version)
+PY
+    return
+  fi
+
+  REPO_URL="$url" python3 - <<'PY'
+import json
+import os
+import sys
+from urllib.request import urlopen
+
+url = os.environ["REPO_URL"]
+try:
+    with urlopen(url, timeout=10) as resp:
+        data = json.load(resp)
+except Exception as exc:
+    raise SystemExit(f"[ERROR] Failed to resolve latest version from {url}: {exc}")
+
+version = (data.get("info") or {}).get("version")
+if not version:
+    raise SystemExit(f"[ERROR] No version metadata returned from {url}")
+print(version)
+PY
+}
+
+build_package_spec() {
+  local version="$1"
+  if [[ -n "$EXTRAS" ]]; then
+    if [[ -n "$version" ]]; then
+      printf 'ephapsys[%s]==%s\n' "$EXTRAS" "$version"
+    else
+      printf 'ephapsys[%s]\n' "$EXTRAS"
+    fi
+  else
+    if [[ -n "$version" ]]; then
+      printf 'ephapsys==%s\n' "$version"
+    else
+      printf 'ephapsys\n'
+    fi
+  fi
+}
+
 case "$MODE" in
   local)
     TARGET="$SDK_DIR"
@@ -138,33 +212,25 @@ case "$MODE" in
     ;;
   testpypi)
     if [[ -z "$VERSION" ]]; then
-      echo "[ERROR] --version is required with --testpypi" >&2
-      exit 1
+      VERSION="$(resolve_latest_version testpypi)"
+      echo "[INFO] Resolved latest TestPyPI version: $VERSION"
     fi
-    PACKAGE="ephapsys==${VERSION}"
-    if [[ -n "$EXTRAS" ]]; then
-      PACKAGE="ephapsys[${EXTRAS}]==${VERSION}"
-    fi
+    PACKAGE="$(build_package_spec "$VERSION")"
     echo "[INFO] Installing $PACKAGE from TestPyPI"
     run_pip_install \
       -i https://test.pypi.org/simple/ \
       --extra-index-url https://pypi.org/simple \
+      --no-cache-dir \
       "$PACKAGE"
     ;;
   pypi)
-    PACKAGE="ephapsys"
-    if [[ -n "$VERSION" ]]; then
-      PACKAGE="ephapsys==${VERSION}"
+    if [[ -z "$VERSION" ]]; then
+      VERSION="$(resolve_latest_version pypi)"
+      echo "[INFO] Resolved latest PyPI version: $VERSION"
     fi
-    if [[ -n "$EXTRAS" ]]; then
-      if [[ -n "$VERSION" ]]; then
-        PACKAGE="ephapsys[${EXTRAS}]==${VERSION}"
-      else
-        PACKAGE="ephapsys[${EXTRAS}]"
-      fi
-    fi
+    PACKAGE="$(build_package_spec "$VERSION")"
     echo "[INFO] Installing $PACKAGE from PyPI"
-    run_pip_install "$PACKAGE"
+    run_pip_install --no-cache-dir "$PACKAGE"
     ;;
 esac
 
