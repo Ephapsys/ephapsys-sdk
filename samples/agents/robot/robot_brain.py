@@ -45,11 +45,12 @@ class RobotBrain:
         self.reasoning_queue: asyncio.Queue = asyncio.Queue()
         self.output_queue: asyncio.Queue = asyncio.Queue()
         self.tts_done_event = asyncio.Event()
+        self.body_mode = os.getenv("ROBOT_BODY_MODE", "local").strip().lower()
         # Live per-turn vision is enabled by default again for the robot demo.
         # It can still be disabled explicitly via env when debugging other paths.
-        self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
+        live_vision_default = "0" if self.body_mode == "remote" else "1"
+        self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", live_vision_default).lower() not in ("0", "false", "no")
         self.world_enabled = os.getenv("ROBOT_ENABLE_WORLD_MODEL", "1").lower() not in ("0", "false", "no")
-        self.body_mode = os.getenv("ROBOT_BODY_MODE", "local").strip().lower()
 
     def set_governor_state(self, decision):
         self.face.set_state(governor=f"{'ALLOW' if decision.allowed else 'BLOCK'}: {decision.reason}")
