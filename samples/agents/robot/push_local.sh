@@ -28,7 +28,47 @@ done
 # ---------------------------------------------------------------------
 # Env + defaults
 # ---------------------------------------------------------------------
+ENV_OVERRIDE_KEYS=(
+  AOC_BASE_URL
+  AOC_API_URL
+  AOC_API
+  API_TOKEN
+  AOC_MODULATION_TOKEN
+  HF_TOKEN
+  AGENT_TEMPLATE_NAME
+  ROBOT_TTS_REPO
+  ROBOT_TTS_NAME
+  ROBOT_VOCODER_REPO
+  ROBOT_VOCODER_NAME
+  ROBOT_STT_REPO
+  ROBOT_STT_NAME
+  ROBOT_LANGUAGE_REPO
+  ROBOT_LANGUAGE_NAME
+  ROBOT_EMBEDDING_REPO
+  ROBOT_EMBEDDING_NAME
+  ROBOT_VISION_REPO
+  ROBOT_VISION_NAME
+  ROBOT_WORLD_REPO
+  ROBOT_WORLD_NAME
+  ROBOT_ENABLE_WORLD_MODEL
+)
+
+for key in "${ENV_OVERRIDE_KEYS[@]}"; do
+  if [[ -n "${!key+x}" ]]; then
+    printf -v "__PRESERVE_%s" "$key" '%s' "${!key}"
+  fi
+done
+
 [[ -f .env ]] && set -o allexport && source .env && set +o allexport
+
+for key in "${ENV_OVERRIDE_KEYS[@]}"; do
+  preserve_var="__PRESERVE_${key}"
+  if [[ -n "${!preserve_var+x}" ]]; then
+    printf -v "$key" '%s' "${!preserve_var}"
+    export "$key"
+    unset "$preserve_var"
+  fi
+done
 
 BASE_URL="${AOC_BASE_URL:-${AOC_API_URL:-${AOC_API:-${BASE_URL:-http://localhost:7001}}}}"
 CLI_API="${BASE_URL}/cli"
