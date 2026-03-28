@@ -187,6 +187,34 @@ class RobotBrain:
                 continue
 
             try:
+                if mic_audio is None:
+                    vision_label = None
+                    if cam_frame is not None:
+                        self.face.set_state(
+                            vision="Analyzing scene",
+                            reasoning="Waiting for speech",
+                            event="Camera update received",
+                        )
+                        vision_started = time.perf_counter()
+                        vision_input = Image.fromarray(cam_frame)
+                        vision_raw = self.agent.run(vision_input, model_kind="vision")
+                        vision_ms = (time.perf_counter() - vision_started) * 1000
+                        vision_label = str(vision_raw).strip() if vision_raw is not None else None
+                        self.face.set_state(
+                            vision=self.face.clip_text(vision_label or "No scene update", 64),
+                            latency={"vision": vision_ms},
+                            event="Waiting for speech",
+                        )
+                        self.face.set_latest("-", vision_label or "-", self.face.latest.get("reply", "-"))
+                        if live is not None:
+                            panel = self.face.render_status("-", vision_label or "-", self.face.latest.get("reply", "-"))
+                            key = self.face.render_key("-", vision_label or "-", self.face.latest.get("reply", "-"))
+                            if key != last_render_key:
+                                live.update(panel)
+                                last_render_key = key
+                    await asyncio.sleep(0.1)
+                    continue
+
                 turn_started = time.perf_counter()
                 stt_ms = 0
                 vision_ms = 0
