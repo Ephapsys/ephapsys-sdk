@@ -191,7 +191,8 @@ async def mic_task():
     while not shutdown_event.is_set():
         try:
             set_ui_state(hearing="Listening on microphone", event="Waiting for speech")
-            audio = capture_microphone()
+            loop = asyncio.get_running_loop()
+            audio = await loop.run_in_executor(None, capture_microphone)
             set_ui_state(hearing=summarize_audio(audio), event="Speech captured")
             mic_queue.put(audio)
         except Exception as e:
@@ -508,7 +509,10 @@ async def process_task(agent, stored_responses, index, live):
             pass
 
         if mic_audio is None and cam_frame is None:
-            set_ui_state(hearing="Listening", vision="Scanning", reasoning="Waiting for input")
+            hearing_state = ui_state["hearing"]
+            if hearing_state in ("Idle", "Listening"):
+                hearing_state = "Listening on microphone"
+            set_ui_state(hearing=hearing_state, vision="Scanning", reasoning="Waiting for input")
             panel = render_status("-", "-", "-")
             key = render_key("-", "-", "-")
             if key != last_render_key:
