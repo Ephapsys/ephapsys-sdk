@@ -28,6 +28,29 @@ class RobotBody:
         self.audio_debug = os.getenv("AUDIO_DEBUG", "").lower() in ("1", "true", "yes")
         self.last_tts_ms = 0.0
         self.speech_enabled = False
+        self._last_hearing_text = None
+        self._last_hearing_event = None
+        self._last_hearing_update_at = 0.0
+
+    @staticmethod
+    def format_level(level: float) -> str:
+        if level < 0.001:
+            return "0.000"
+        if level < 0.01:
+            return f"{level:.3f}"
+        return f"{level:.2f}"
+
+    def set_hearing_state(self, hearing: str, event: str, *, force: bool = False, min_interval: float = 0.35):
+        now = time.time()
+        if not force:
+            if hearing == self._last_hearing_text and event == self._last_hearing_event:
+                return
+            if (now - self._last_hearing_update_at) < min_interval and event == self._last_hearing_event:
+                return
+        self._last_hearing_text = hearing
+        self._last_hearing_event = event
+        self._last_hearing_update_at = now
+        self.face.set_state(hearing=hearing, event=event)
 
     def ensure_preprocessor(self, tts_path: str) -> bool:
         try:
@@ -80,8 +103,8 @@ class RobotBody:
                 raw_speech = vad.is_speech(chunk.tobytes(), sr)
                 if not self.speech_enabled:
                     vad_hint = "speech" if raw_speech else "noise"
-                    self.face.set_state(
-                        hearing=f"Microphone armed @ level {level:.3f} ({vad_hint})",
+                    self.set_hearing_state(
+                        hearing=f"Microphone armed @ level {self.format_level(level)} ({vad_hint})",
                         event="Greeting",
                     )
                     start_time = time.time()
@@ -107,7 +130,11 @@ class RobotBody:
                     heard_speech = True
                     silence_count = 0
                     speech_label = "Quiet speech detected" if quiet_speech and not is_speech else "Speech detected"
-                    self.face.set_state(hearing=f"{speech_label} @ level {level:.3f}", event="Capturing utterance")
+                    self.set_hearing_state(
+                        hearing=f"{speech_label} @ level {self.format_level(level)}",
+                        event="Capturing utterance",
+                        force=True,
+                    )
                     pre_roll = chunk_size * speech_start_frames
                     if len(buffer) > pre_roll:
                         buffer = buffer[-pre_roll:]
@@ -116,22 +143,25 @@ class RobotBody:
 
                 if heard_speech and active_speech:
                     speech_label = "Quiet speech detected" if quiet_speech and not is_speech else "Speech detected"
-                    self.face.set_state(hearing=f"{speech_label} @ level {level:.3f}", event="Capturing utterance")
+                    self.set_hearing_state(
+                        hearing=f"{speech_label} @ level {self.format_level(level)}",
+                        event="Capturing utterance",
+                    )
                     silence_count = 0
                     buffer.extend(chunk)
                 elif heard_speech:
                     silence_count += 1
                     buffer.extend(chunk)
-                    self.face.set_state(
-                        hearing=f"Listening for end of speech @ level {level:.3f}",
+                    self.set_hearing_state(
+                        hearing=f"Listening for end of speech @ level {self.format_level(level)}",
                         event="Capturing utterance",
                     )
                     if silence_count > silence_limit:
                         break
                 else:
                     vad_hint = "speech" if raw_speech else "noise"
-                    self.face.set_state(
-                        hearing=f"Listening on microphone @ level {level:.3f} ({vad_hint})",
+                    self.set_hearing_state(
+                        hearing=f"Listening on microphone @ level {self.format_level(level)} ({vad_hint})",
                         event="Waiting for speech",
                     )
                     buffer.extend(chunk)
@@ -173,17 +203,17 @@ class RobotBody:
     async def mic_task(self):
         while not self.shutdown_event.is_set():
             try:
-                self.face.set_state(hearing="Listening on microphone", event="Waiting for speech")
+                self.set_hearing_state("Listening on microphone", "Waiting for speech", force=True)
                 loop = asyncio.get_running_loop()
                 audio = await loop.run_in_executor(None, self.capture_microphone)
-                self.face.set_state(hearing=self.summarize_audio(audio), event="Speech captured")
+                self.set_hearing_state(self.summarize_audio(audio), "Speech captured", force=True)
                 await self.channel.emit_event(
                     "microphone",
                     audio=audio,
                     summary=self.summarize_audio(audio),
                 )
             except Exception as exc:
-                self.face.set_state(hearing="Microphone error", event=f"Mic failure: {exc}")
+                self.set_hearing_state("Microphone error", f"Mic failure: {exc}", force=True)
                 self.face.console_log.log(f"Mic capture error: {exc}")
             await asyncio.sleep(0.1)
 
