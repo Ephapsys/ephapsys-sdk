@@ -61,7 +61,7 @@ def main():
             anchor = os.getenv("PERSONALIZE_ANCHOR", "tpm")
             print(f"[HelloWorld] Agent not personalized; running personalize(anchor={anchor})...")
             agent.personalize(anchor=anchor)
-            print(f"DEBUG agent_id after personalize: {agent.agent_id}")
+            print(f"[HelloWorld] Instance ID: {agent.agent_id}")
             # Re-verify with retries to allow backend state to settle
             for _ in range(5):  # retry up to 5 times
                 ok, report = agent.verify()
