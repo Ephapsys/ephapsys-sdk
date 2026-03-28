@@ -31,6 +31,8 @@ async def _run_brain():
     try:
         mic_task = asyncio.create_task(body.mic_task())
         tts_task = asyncio.create_task(body.tts_worker(brain.agent))
+        ingest_task = asyncio.create_task(brain.ingest_channel_events())
+        output_task = asyncio.create_task(brain.output_arbiter())
         await brain.startup()
         brain_ready.set()
         await asyncio.gather(
@@ -39,6 +41,8 @@ async def _run_brain():
             brain.periodic_verify(),
             mic_task,
             tts_task,
+            ingest_task,
+            output_task,
             return_exceptions=True,
         )
     except Exception as exc:

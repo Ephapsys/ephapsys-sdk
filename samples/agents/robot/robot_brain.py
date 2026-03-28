@@ -34,6 +34,8 @@ class RobotBrain:
         self.language_warm_task = None
         self.language_warm_done = False
         self.awaiting_tts_done = False
+        self.reasoning_queue = asyncio.Queue()
+        self.output_queue = asyncio.Queue()
         # Live per-turn vision is enabled by default again for the robot demo.
         # It can still be disabled explicitly via env when debugging other paths.
         self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
@@ -66,6 +68,12 @@ class RobotBrain:
         result = self.toolbox.execute(intent)
         self.face.set_state(tools=f"Completed {intent.payload.get('tool', 'tool')}")
         return result
+
+    async def emit_reasoning_event(self, kind: str, **payload):
+        await self.reasoning_queue.put({"kind": kind, "payload": payload})
+
+    async def emit_output_event(self, kind: str, **payload):
+        await self.output_queue.put({"kind": kind, "payload": payload})
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
@@ -297,6 +305,35 @@ class RobotBrain:
                 self.face.console_log.log(f"⚠️ Verification failed: {exc}")
                 self.face.agent_status.update({"enabled": False, "revoked": True})
 
+    async def ingest_channel_events(self):
+        while not self.shutdown_event.is_set():
+            try:
+                event = await self.channel.next_event(timeout=0.2)
+            except Exception:
+                event = None
+            if event is None:
+                continue
+            try:
+                await self.emit_reasoning_event(event.kind, **event.payload)
+            finally:
+                self.channel.event_done()
+
+    async def output_arbiter(self):
+        while not self.shutdown_event.is_set():
+            item = await self.output_queue.get()
+            try:
+                kind = item.get("kind")
+                payload = item.get("payload", {})
+                if kind == "speak":
+                    self.awaiting_tts_done = True
+                    self.body.speech_enabled = False
+                    self.face.set_state(speaking="Queued for playback", event="Reply ready")
+                    await self.channel.send_command("speak", text=payload.get("text", ""))
+                elif kind == "body_control":
+                    await self.channel.send_command("body_control", action=payload.get("action", "idle"))
+            finally:
+                self.output_queue.task_done()
+
     async def process_task(self, live=None):
         last_render_key = None
         latest_camera_frame = None
@@ -317,11 +354,11 @@ class RobotBrain:
                 continue
 
             try:
-                event = await self.channel.next_event(timeout=0.2)
-            except Exception:
-                event = None
+                item = await asyncio.wait_for(self.reasoning_queue.get(), timeout=0.2)
+            except asyncio.TimeoutError:
+                item = None
 
-            if event is None:
+            if item is None:
                 self.face.set_state(vision="Scanning", reasoning="Waiting for speech")
                 if live is not None:
                     panel = self.face.render_status(
@@ -340,8 +377,10 @@ class RobotBrain:
                 continue
 
             try:
-                if event.kind == "camera":
-                    latest_camera_frame = event.payload.get("frame")
+                event_kind = item.get("kind")
+                event_payload = item.get("payload", {})
+                if event_kind == "camera":
+                    latest_camera_frame = event_payload.get("frame")
                     vision_label = latest_vision_label
                     if self.live_vision_enabled and latest_camera_frame is not None:
                         camera_state = {
@@ -360,7 +399,13 @@ class RobotBrain:
                         latest_world_summary = self.compute_world_summary(latest_camera_frame, latest_vision_label)
                         latest_scene_summary = latest_world_summary or latest_vision_label or "-"
                         self.latest_camera_frame = latest_camera_frame
-                        await self.dispatch_body_intent(latest_world_summary)
+                        intent = body_intent_for_world(latest_world_summary)
+                        decision = self.governor.approve(intent)
+                        self.set_governor_state(decision)
+                        if decision.allowed:
+                            action = intent.payload.get("action", "idle")
+                            self.face.set_state(body=str(action))
+                            await self.emit_output_event("body_control", action=action)
                         self.face.set_state(
                             vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                             world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
@@ -395,7 +440,7 @@ class RobotBrain:
                         )
                     continue
 
-                if event.kind == "tts_done":
+                if event_kind == "tts_done":
                     self.awaiting_tts_done = False
                     self.body.speech_enabled = True
                     self.face.set_state(
@@ -407,15 +452,15 @@ class RobotBrain:
                     )
                     continue
 
-                if event.kind == "body_control_done":
-                    self.face.set_state(event=f"Body ready: {event.payload.get('action', 'idle')}")
+                if event_kind == "body_control_done":
+                    self.face.set_state(event=f"Body ready: {event_payload.get('action', 'idle')}")
                     continue
 
-                if event.kind != "microphone":
+                if event_kind != "microphone":
                     continue
 
-                mic_audio = event.payload.get("audio")
-                heard_summary = event.payload.get("summary") or "No speech"
+                mic_audio = event_payload.get("audio")
+                heard_summary = event_payload.get("summary") or "No speech"
 
                 turn_started = time.perf_counter()
                 stt_ms = 0
@@ -468,7 +513,13 @@ class RobotBrain:
                     latest_world_summary = self.compute_world_summary(latest_camera_frame, latest_vision_label)
                     latest_scene_summary = latest_world_summary or latest_vision_label or "-"
                     self.latest_camera_frame = latest_camera_frame
-                    await self.dispatch_body_intent(latest_world_summary)
+                    intent = body_intent_for_world(latest_world_summary)
+                    decision = self.governor.approve(intent)
+                    self.set_governor_state(decision)
+                    if decision.allowed:
+                        action = intent.payload.get("action", "idle")
+                        self.face.set_state(body=str(action))
+                        await self.emit_output_event("body_control", action=action)
                     self.face.set_state(
                         vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                         world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
@@ -563,10 +614,7 @@ class RobotBrain:
                 )
 
                 if self.body.tts_available:
-                    self.awaiting_tts_done = True
-                    self.body.speech_enabled = False
-                    self.face.set_state(speaking="Queued for playback", event="Reply ready")
-                    await self.channel.send_command("speak", text=augmented_text)
+                    await self.emit_output_event("speak", text=augmented_text)
 
                 self.face.set_latest(
                     text_input,
@@ -591,7 +639,7 @@ class RobotBrain:
                 self.face.console_log.log(f"Processing error: {detail}")
                 self.face.console_log.log(traceback.format_exc())
             finally:
-                if event is not None:
-                    self.channel.event_done()
+                if item is not None:
+                    self.reasoning_queue.task_done()
 
             await asyncio.sleep(0.1)
