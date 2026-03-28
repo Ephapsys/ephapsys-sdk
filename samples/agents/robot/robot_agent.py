@@ -414,15 +414,20 @@ async def periodic_verify(agent):
 async def tts_worker(agent):
     """Serialize TTS requests to avoid concurrent PortAudio calls."""
     while not shutdown_event.is_set():
+        got_item = False
         try:
             text = await tts_queue.get()
+            got_item = True
             if audio_debug:
                 console_log.log(f"TTS worker dequeued: {text[:80]}{'...' if len(text)>80 else ''}")
             await play_tts_async(agent, text)
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             console_log.log(f"TTS worker error: {e}")
         finally:
-            tts_queue.task_done()
+            if got_item:
+                tts_queue.task_done()
 
 
 # -------------------------------------------------------------------
@@ -438,20 +443,6 @@ def cleanup():
             console_log.log("Camera released")
         except Exception:
             pass
-
-# -------------------------------------------------------------------
-# Status rendering
-# -------------------------------------------------------------------
-def render_status(mic, vision, response):
-    return Panel.fit(
-        f"[bold cyan]Mic:[/bold cyan] {mic or '-'}\n"
-        f"[bold green]Vision:[/bold green] {vision or '-'}\n"
-        f"[bold yellow]Response:[/bold yellow] {response or '-'}\n"
-        f"[bold white]Status:[/bold white] {format_status()}",
-        title="🤖 Robot Agent",
-        border_style="blue"
-    )
-
 
 def render_key(mic, vision, response):
     """Hashable key so we only redraw when content actually changes."""
@@ -645,11 +636,14 @@ async def main():
         else:
             console_live.print("[red]❌ Skipping greeting TTS (agent not enabled or TTS assets missing)")
     except Exception as e:
-        console_log.log(
-            f"[red]⚠️ Greeting TTS failed "
-            f"(MOST LIKELY DUE TO INSUFFICIENT MODULATION. "
-            f"IT IS OKAY FOR NOW UNTIL WE COMPLETE MODULATION ON GCP): {e}"
-        )
+        reason = str(e)
+        if "upgrade torch to at least v2.6" in reason:
+            console_log.log(
+                "[red]⚠️ Greeting TTS unavailable: this environment needs torch>=2.6 for secure .pt loading.[/red]"
+            )
+            console_log.log(f"[dim]{reason}[/dim]")
+        else:
+            console_log.log(f"[red]⚠️ Greeting TTS failed:[/red] {reason}")
 
 
     dim = 768
@@ -679,6 +673,7 @@ async def main():
                 process_task(agent, stored_responses, index, live),  # ✅ pass live correctly
                 periodic_verify(agent),
                 tts_worker(agent),
+                return_exceptions=True,
             )
     finally:
         cleanup()
@@ -691,4 +686,4 @@ if __name__ == "__main__":
         console_log.log("Shutting down (Ctrl+C).")
         shutdown_event.set()
         cleanup()
-        sys.exit(0)
+    sys.exit(0)
