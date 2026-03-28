@@ -9,6 +9,9 @@
 set -euo pipefail
 
 MODE="${1:-run}" # run | smoke
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../../../" && pwd)"
+SDK_SETUP_SH="$REPO_DIR/scripts/setup.sh"
 
 info() {
   echo "[INFO] $*"
@@ -20,6 +23,52 @@ warn() {
 
 error() {
   echo "[ERROR] $*" >&2
+}
+
+ensure_runtime_env() {
+  local venv sdk_extras
+  venv="${ROBOT_VENV:-.venv}"
+  sdk_extras="${ROBOT_SDK_EXTRAS:-audio,vision,embedding}"
+
+  if [ "${ROBOT_USE_LOCAL_SDK:-0}" = "1" ]; then
+    if [ ! -d "$venv" ]; then
+      info "Creating local virtualenv at $venv"
+      python3 -m venv "$venv"
+    fi
+    # shellcheck disable=SC1090
+    source "$venv/bin/activate"
+    if [ ! -d "../../../sdk/python" ]; then
+      error "Local SDK path not found at ../../../sdk/python"
+      exit 1
+    fi
+    info "Installing robot sample requirements into $venv"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade pip --quiet
+    PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -r requirements.txt --quiet
+    info "Installing local Ephapsys SDK from repo into $venv"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -e "../../../sdk/python[${sdk_extras}]" --quiet
+    return
+  fi
+
+  if [ ! -x "$SDK_SETUP_SH" ]; then
+    error "SDK setup helper not found at $SDK_SETUP_SH"
+    exit 1
+  fi
+
+  info "Ensuring latest published Ephapsys SDK in $venv"
+  "$SDK_SETUP_SH" --pypi --venv "$venv" --extras "$sdk_extras"
+  # shellcheck disable=SC1090
+  source "$venv/bin/activate"
+
+  if ! python3 -c "import fastapi, uvicorn, websockets" >/dev/null 2>&1; then
+    info "Installing robot sample-local requirements"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -r requirements.txt --quiet
+  fi
+
+  if ! python3 -c "import ephapsys, transformers, faiss, cv2, sounddevice, webrtcvad, fastapi, uvicorn, websockets" >/dev/null 2>&1; then
+    error "Published SDK environment is missing required runtime dependencies."
+    error "Install failed or the selected package does not include the required extras."
+    exit 1
+  fi
 }
 
 # Load .env if available (preserve spaces by using set -a)
@@ -53,37 +102,7 @@ if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
   exit 0
 fi
 
-SDK_PATH="../../../sdk/python"
-if ! python3 -c "import fastapi, uvicorn, websockets" >/dev/null 2>&1; then
-  info "Installing robot sample-local requirements"
-  PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -r requirements.txt --quiet
-fi
-
-if ! python3 -c "import ephapsys, transformers, faiss, cv2, sounddevice, webrtcvad, fastapi, uvicorn, websockets" >/dev/null 2>&1; then
-  if [ "${ROBOT_USE_LOCAL_SDK:-0}" = "1" ]; then
-    VENV="${ROBOT_VENV:-.venv}"
-    if [ ! -d "$VENV" ]; then
-      info "Creating local virtualenv at $VENV"
-      python3 -m venv "$VENV"
-    fi
-    # shellcheck disable=SC1090
-    source "$VENV/bin/activate"
-    if [ ! -d "$SDK_PATH" ]; then
-      error "Local SDK path not found at $SDK_PATH"
-      exit 1
-    fi
-    info "Installing robot sample requirements into $VENV"
-    PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade pip --quiet
-    PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -r requirements.txt --quiet
-    info "Installing local Ephapsys SDK from repo into $VENV"
-    PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -e "${SDK_PATH}[audio,vision,embedding]" --quiet
-  else
-    error "Missing runtime dependencies in the current Python environment."
-    error "Run: pip install \"ephapsys[audio,vision,embedding]\" && pip install -r requirements.txt"
-    error "For repo-local development only, rerun with ROBOT_USE_LOCAL_SDK=1."
-    exit 1
-  fi
-fi
+ensure_runtime_env
 
 info "Starting Robot Agent..."
 if [ -n "${AGENT_TEMPLATE_NAME:-}" ]; then
