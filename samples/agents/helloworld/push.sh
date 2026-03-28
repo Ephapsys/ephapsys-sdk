@@ -151,7 +151,7 @@ print_plan() {
   local publish_mode="full modulation"
   local plan_label="${MODEL_NAME:-Starter Model}"
   if [[ "$IDEMPOTENT" -eq 1 ]]; then
-    publish_mode="idempotent publish"
+    publish_mode="idempotent in-graph training"
   fi
   printf "\n${GOLD}%s${RESET}\n" "$plan_label"
   printf "  Target AOC:       %s\n" "$AOC_API"
@@ -369,7 +369,7 @@ poll_until_ready() {
 
 trigger_idempotent_publish() {
   local model_id="$1"
-  step "Triggering idempotent publish for ${model_id}"
+  step "Triggering idempotent in-graph modulation for ${model_id}"
   curl -sS -X POST "${AOC_API}/modulation/start" \
     "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
@@ -411,8 +411,6 @@ run_modulation() {
   prepare_modulator_env
   if [[ "$IDEMPOTENT" -eq 1 ]]; then
     trigger_idempotent_publish "$MODEL_TEMPLATE_ID"
-    poll_until_ready "$MODEL_TEMPLATE_ID"
-    return
   fi
   if [[ "$MODE" == "local" ]]; then
     info "Running language modulation locally..."
@@ -478,7 +476,7 @@ save_env_var MODEL_TEMPLATE_ID "$MODEL_TEMPLATE_ID"
 
 if [[ "$FORCE_MODULATE" -eq 1 ]] || ! model_ready "$MODEL_TEMPLATE_ID"; then
   if [[ "$IDEMPOTENT" -eq 1 ]]; then
-    step "Publishing model template via idempotent path"
+    step "Publishing model template via idempotent in-graph path"
   else
     step "Publishing model template via full modulation path"
   fi
