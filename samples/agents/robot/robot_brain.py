@@ -307,7 +307,7 @@ class RobotBrain:
             )
         if startup_vision:
             self.face.console_live.print(f"[cyan]👁️ Startup vision: {startup_vision}[/cyan]")
-        if self.body.tts_available:
+        if self.body.tts_available and self.body_mode != "remote":
             self.body.speech_enabled = False
             self.face.set_state(reasoning="Greeting ready", speaking="Queued for startup greeting", event="Greeting")
             await self.emit_face_intent(
@@ -322,6 +322,12 @@ class RobotBrain:
                 await asyncio.wait_for(self.tts_done_event.wait(), timeout=30.0)
             except asyncio.TimeoutError:
                 self.face.console_log.log("Startup greeting did not receive tts_done before timeout")
+        elif self.body_mode == "remote":
+            self.face.set_state(
+                reasoning="Waiting for speech",
+                speaking="Remote face will render greeting",
+                event="Live interaction loop started",
+            )
         self.body.speech_enabled = True
         if self.language_warm_task is None:
             self.language_warm_task = asyncio.create_task(self.warm_language_runtime())
