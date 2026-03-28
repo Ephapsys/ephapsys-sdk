@@ -19,6 +19,37 @@ class RobotBrain:
         self.index = faiss.IndexFlatL2(768)
         self.stored_responses = []
 
+    def build_startup_greeting(self):
+        vision_label = None
+        try:
+            self.face.set_state(vision="Looking for a first impression", reasoning="Observing the scene")
+            frame = self.body.capture_startup_frame()
+            if frame is not None:
+                vision_raw = self.agent.run(frame, model_kind="vision")
+                vision_label = str(vision_raw).strip() if vision_raw is not None else None
+        except Exception as exc:
+            self.face.console_log.log(f"Startup vision greeting fallback: {exc}")
+
+        prompt = (
+            "You are Asimov, a trusted multimodal robot. "
+            "Generate one short natural spoken greeting for the person in front of you. "
+            "Keep it under 18 words, warm, intelligent, and do not mention model names."
+        )
+        if vision_label:
+            prompt += f" You currently see: {vision_label}."
+        else:
+            prompt += " You do not yet have a clear visual classification."
+
+        try:
+            greeting = str(self.agent.run(prompt, model_kind='language')).strip()
+        except Exception as exc:
+            self.face.console_log.log(f"Startup language greeting fallback: {exc}")
+            greeting = ""
+
+        greeting = greeting or "Hello there."
+        greeting = " ".join(greeting.split())
+        return greeting, vision_label
+
     async def startup(self):
         self.face.startup()
         self.face.set_state(
@@ -84,8 +115,11 @@ class RobotBrain:
             f"(voice={'ready' if self.body.tts_available else 'unavailable'}, models={', '.join(sorted(runtimes.keys()))})"
         )
 
-        greeting = "Hi, my name is Asimov, at your service."
-        self.face.set_latest("-", "-", greeting)
+        self.face.set_state(event="Composing greeting", reasoning="Generating first response")
+        greeting, startup_vision = self.build_startup_greeting()
+        self.face.set_latest("-", startup_vision or "-", greeting)
+        if startup_vision:
+            self.face.set_state(vision=self.face.clip_text(startup_vision, 64))
         self.face.console_live.print(f"[cyan]🤖 Greeting: {greeting}[/cyan]")
         try:
             if self.face.agent_status.get("enabled", False) and not self.face.agent_status.get("revoked", False) and self.body.tts_available:

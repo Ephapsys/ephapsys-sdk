@@ -171,6 +171,19 @@ class RobotBody:
             raise RuntimeError("Camera capture failed")
         return frame[:, :, ::-1], now
 
+    def capture_startup_frame(self):
+        cap = cv2.VideoCapture(0)
+        try:
+            ret, frame = cap.read()
+            if not ret:
+                return None
+            return frame[:, :, ::-1]
+        finally:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
     async def cam_task(self):
         self.camera_cap = cv2.VideoCapture(0)
         last = 0
