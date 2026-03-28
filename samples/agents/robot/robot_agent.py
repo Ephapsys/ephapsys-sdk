@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
 try:
     import torch
@@ -68,6 +69,10 @@ def stream_subprocess_output(pipe, sink):
 
 async def main():
     port = int(os.getenv("ROBOT_BRAIN_PORT", "8765"))
+    stream_logs = os.getenv("ROBOT_STREAM_BRAIN_LOGS", "").lower() in ("1", "true", "yes")
+    log_path = Path(os.getenv("ROBOT_BRAIN_LOG_PATH", ".ephapsys_state/robot_brain.log"))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_sink = sys.stderr if stream_logs else log_path.open("w", encoding="utf-8")
     server_proc = subprocess.Popen(
         [
             sys.executable,
@@ -89,7 +94,7 @@ async def main():
     )
     output_thread = threading.Thread(
         target=stream_subprocess_output,
-        args=(server_proc.stdout, sys.stderr),
+        args=(server_proc.stdout, log_sink),
         daemon=True,
     )
     output_thread.start()
@@ -103,6 +108,8 @@ async def main():
         except subprocess.TimeoutExpired:
             server_proc.kill()
         output_thread.join(timeout=1)
+        if log_sink is not sys.stderr:
+            log_sink.close()
 
 
 if __name__ == "__main__":
