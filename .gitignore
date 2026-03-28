@@ -5,6 +5,8 @@ node_modules/
 .env
 .env.stag
 .env.prod
+.env.gcp
+samples/**/.env.gcp
 .docker_sdk/
 .venv/
 gcp.env

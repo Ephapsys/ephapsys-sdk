@@ -5,12 +5,12 @@ usage() {
   cat <<'EOF'
 Usage:
   ./run.sh --local
-  ./run.sh --gcp [--staging|--production] [other run_gcp.sh flags]
+  ./run.sh --gcp [other run_gcp.sh flags]
 
 Examples:
   ./run.sh --local
-  ./run.sh --gcp --staging
-  ./run.sh --gcp --production --gpu --gpu-type t4
+  ./run.sh --gcp
+  ./run.sh --gcp --gpu --gpu-type t4
 
 Notes:
   --local runs preflight automatically, then launches ./run_local.sh

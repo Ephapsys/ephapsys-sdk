@@ -128,14 +128,14 @@ If startup fails, check these first:
 Complete the checklist below after publishing the new SDK and redeploying the AOC backend:
 
 1. **Modulated model + agent template** – Ensure the model you want is modulated in AOC and bound to an agent template; capture the template ID for `.env.*`.
-2. **API credentials** – Keep your usual `.env`, `.env.stag`, and `.env.prod` files up to date in your local/deployment environment. These files are intentionally not tracked in git.
+2. **API credentials** – Keep your local `.env` and `.env.gcp` files up to date. These files are intentionally not tracked in git.
 3. **gcloud access** – Run `gcloud auth login` (or `gcloud auth application-default login`) on the machine invoking `run.sh --gcp` and make sure you can `gcloud compute ssh` into the target project/zone.
 4. **Compute IAM** – The user running `gcloud` needs `roles/compute.instanceAdmin.v1`. Use `./check_iam_role.sh --project <project> --member user:<you>` (or grant the role via Cloud Console).
 5. **Cloud KMS key (only if `PERSONALIZE_ANCHOR=hsm`)**
-   - If you already have a key, set `HSM_KMS_KEY` (and optionally `HSM_KMS_CREDENTIALS`) in `.env.stag`/`.env.prod`.
+   - If you already have a key, set `HSM_KMS_KEY` (and optionally `HSM_KMS_CREDENTIALS`) in `.env.gcp`.
    - Otherwise do nothing—`run.sh --gcp` will automatically call `./provision_kms_key.sh` (using the default Compute Engine service account or the one you specify via `COMPUTE_SERVICE_ACCOUNT`) and capture the resulting `HSM_KMS_KEY` for you.
 6. **Vendor HSM (non-GCP)** – Skip the KMS step, set `HSM_HELPER="<your helper command>"`, and export whatever PKCS#11/KMIP env vars the helper requires; confirm it prints valid JSON when invoked with a nonce.
-7. **Local `.env` sanity check** – Run `grep -v '^#' .env.stag` (or `.env.prod`) on your local copy and verify no required variable is blank.
+7. **Local `.env` sanity check** – Run `grep -v '^#' .env.gcp` on your local copy and verify no required variable is blank.
 
 ### Local
 
@@ -156,8 +156,8 @@ That opt-in path creates `.venv` if needed and installs the SDK from the local c
 
 ### GCP VM
 
-1. Populate `.env.stag` or `.env.prod` with the appropriate credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, `AGENT_TEMPLATE_ID`)—both set `PERSONALIZE_ANCHOR=tpm` by default.
-2. Run `./run.sh --gcp --staging` or `./run.sh --gcp --production`. The script:
+1. Populate local `.env` with the appropriate agent credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, `AGENT_TEMPLATE_ID`) and local `.env.gcp` with your GCP deployment settings.
+2. Run `./run.sh --gcp`. The script:
    - Reads the chosen `.env.*` before naming the VM so the hostname reflects the anchor (e.g., `hello-agent-<ts>-tpm`).
    - Creates a Shielded VM with vTPM enabled (required for TPM anchors).
    - Installs the SDK + deps, pins NumPy `<2`, sets up `tpm2-tools`, and starts the bot via `nohup … >> helloworld.log`.
@@ -170,7 +170,7 @@ That opt-in path creates `.venv` if needed and installs the SDK from the local c
 If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 
 1. Provision a Cloud KMS asymmetric-signing key (optionally with `--protection-level=hsm`) and grant the VM’s service account `roles/cloudkms.signerVerifier` on that key. You can automate this with `./provision_kms_key.sh --project <id> --service-account <sa@project.iam.gserviceaccount.com> [--hsm]`.
-2. In `.env.stag`/`.env.prod`, set (or rely on the values automatically loaded from your global `.env.*` files):
+2. In `.env.gcp`, set:
    ```ini
    PERSONALIZE_ANCHOR=hsm
    HSM_KMS_KEY=projects/<project>/locations/<loc>/keyRings/<ring>/cryptoKeys/<key>[/cryptoKeyVersions/<n>]
@@ -180,7 +180,7 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
    ```
    Optional overrides: `HSM_KMS_LOCATION` (default `us-central1`), `HSM_KMS_KEY_RING` (default `agents`), `HSM_KMS_KEY_NAME` (default `helloworld`), `HSM_KMS_USE_HSM=1` (forces `--protection-level=hsm` when auto-provisioning), and `COMPUTE_SERVICE_ACCOUNT` if you don’t want to use the project’s default Compute Engine service account.
    > Not on Google Cloud? Leave the `HSM_KMS_*` vars empty, set `HSM_HELPER` to the command that talks to your HSM (for example, a PKCS#11-based helper), and configure whatever environment variables that helper requires. As long as it prints the evidence JSON expected by the SDK (`sig_b64`, `nonce_b64`, optional cert chain, slot, label), personalization will succeed with any vendor module.
-3. Run `./run.sh --gcp --staging` (or `--production`). If `HSM_KMS_KEY` is blank and no helper is configured, the script automatically provisions the Cloud KMS key (via `provision_kms_key.sh`), grants the Compute Engine service account `roles/cloudkms.signerVerifier`, and then proceeds with deployment. It also skips TPM tooling, uploads any credential JSON into `~/helloworld/.secrets/kms-credentials.json`, rewrites `.env` on the VM so both `HSM_KMS_CREDENTIALS` and `GOOGLE_APPLICATION_CREDENTIALS` point at that path, and prints a `[VM] Personalization anchor=hsm` log so it’s obvious which mode is active.
+3. Run `./run.sh --gcp`. If `HSM_KMS_KEY` is blank and no helper is configured, the script automatically provisions the Cloud KMS key (via `provision_kms_key.sh`), grants the Compute Engine service account `roles/cloudkms.signerVerifier`, and then proceeds with deployment. It also skips TPM tooling, uploads any credential JSON into `~/helloworld/.secrets/kms-credentials.json`, rewrites `.env` on the VM so both `HSM_KMS_CREDENTIALS` and `GOOGLE_APPLICATION_CREDENTIALS` point at that path, and prints a `[VM] Personalization anchor=hsm` log so it’s obvious which mode is active.
 4. `helloworld_agent.py` now calls Google Cloud KMS via `google-cloud-kms` to sign the backend nonce, and `reattach_gcp.sh` can reconnect later without touching TPM-specific flow.
 
 ---
@@ -192,7 +192,7 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
   - Includes optional commented A2A hints using `A2AClient` (send/inbox/ack) for peer-agent messaging.
 - `run.sh` → Public entrypoint. Use `--local` for local execution or `--gcp` for VM deployment.
 - `run_local.sh` → Local helper invoked by `run.sh --local`.
-- `run_gcp.sh` → GCP helper invoked by `run.sh --gcp`, with `--staging/--production`, `--interactive/--no-interactive`, and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
+- `run_gcp.sh` → GCP helper invoked by `run.sh --gcp`, with `--interactive/--no-interactive` and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
 - `reattach_gcp.sh` → Smart reconnection helper. If it detects `helloworld_agent.py` running, it loads `.env`, activates the venv, and drops you into the chatbot. Otherwise it tails `~/helloworld/helloworld.log`.
 - `detach_gcp.sh` → (Legacy) left around in case you revert to tmux; not needed in the default workflow.
 - `check_iam_role.sh` → Quick helper to verify whether the current (or supplied) gcloud account has `roles/compute.instanceAdmin.v1` on the project.
@@ -200,4 +200,4 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 - *IAM note*: The scripts call `gcloud compute ssh`, which requires `roles/compute.instanceAdmin.v1`. If you’re running in a sandbox where gcloud can’t write credentials (common in CI), grant that role once via Cloud Console or from a machine with full gcloud access.
 - `check_iam_role.sh` → Quick helper to verify whether the current (or supplied) gcloud account has `roles/compute.instanceAdmin.v1` on the project.
 - `.env.example` → tracked example env for local bootstrap.
-- `.env.stag`, `.env.prod` → local-only env files used for staging/production runs when present.
+- `.env.gcp.example` → tracked template for your untracked local `.env.gcp`.

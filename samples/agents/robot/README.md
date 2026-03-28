@@ -161,6 +161,7 @@ Run the robot brain in GCP while keeping the local microphone, camera, speaker,
 and terminal face on your machine:
 
 ```bash
+cp .env.gcp.example .env.gcp
 ./run.sh --gcp
 ```
 
@@ -170,6 +171,7 @@ Notes for `--gcp`:
 - starts only `robot_brain_server.py` on the VM
 - opens an SSH tunnel back to `localhost`
 - runs `robot_remote_agent.py` locally so your body and terminal stay local
+- GCP deployment settings come from local `.env.gcp` and are not tracked
 - package-source overrides are env-based:
   - `ROBOT_SDK_PACKAGE_SOURCE=testpypi`
   - `ROBOT_SDK_PACKAGE_SOURCE=custom` with `ROBOT_SDK_INDEX_URL=...`
@@ -211,6 +213,7 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 - `robot_remote_agent.py` → Local remote-body client for GCP mode.
 - `robot_face.py` → Terminal face layer for live developer feedback.
 - `quickstart.sh` → Creates `.env` if needed, bootstraps robot templates, then launches the sample.
+- `.env.gcp.example` → tracked template for your untracked local `.env.gcp`.
 - `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh` or `push_gcp.sh`.
 - `push_gcp.sh` → GCP wrapper for the same robot template bootstrap flow.
 - `run.sh` → Public run entrypoint that dispatches to `run_local.sh` or `run_gcp.sh`.

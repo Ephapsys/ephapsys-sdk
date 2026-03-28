@@ -23,39 +23,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 PYPROJECT="$REPO_ROOT/Product/ephapsys-sdk/sdk/python/pyproject.toml"
 META_FILE="$SCRIPT_DIR/.last_gcp_instance"
-
-PROJECT_ID="${PROJECT_ID:-ephapsys-development}"
-ZONE="${ZONE:-us-central1-a}"
-MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-8}"
-DISK_SIZE="${DISK_SIZE:-80GB}"
-IMAGE_FAMILY="${IMAGE_FAMILY:-ubuntu-2204-lts}"
-IMAGE_PROJECT="${IMAGE_PROJECT:-ubuntu-os-cloud}"
-INSTANCE_PREFIX="${INSTANCE_PREFIX:-robot-brain}"
-REMOTE_DIR="${REMOTE_DIR:-robot}"
-REMOTE_PORT="${REMOTE_PORT:-8765}"
-LOCAL_TUNNEL_PORT="${LOCAL_TUNNEL_PORT:-48765}"
-CPU_ONLY=true
-GPU_TYPE="${GPU_TYPE:-nvidia-tesla-t4}"
-GPU_COUNT="${GPU_COUNT:-1}"
-GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-n1-standard-8}"
-SDK_PACKAGE_SOURCE="${ROBOT_SDK_PACKAGE_SOURCE:-pypi}"
-SDK_INDEX_URL="${ROBOT_SDK_INDEX_URL:-}"
-SDK_EXTRA_INDEX_URL="${ROBOT_SDK_EXTRA_INDEX_URL:-}"
+GCP_ENV_FILE="${ROBOT_GCP_ENV_FILE:-$SCRIPT_DIR/.env.gcp}"
 
 usage() {
   cat <<'EOF'
 Usage:
   ./run_gcp.sh
-  ./run_gcp.sh --zone us-central1-a --machine-type e2-standard-8
-  ./run_gcp.sh --gpu --gpu-type nvidia-tesla-t4
+  ./run_gcp.sh --gpu
+  ./run_gcp.sh --local-port 48765
 
 Notes:
   - Deploys only the Robot brain to GCP.
   - Keeps microphone, camera, speaker, and terminal face local.
   - Opens an SSH tunnel to the remote brain and runs ./robot_remote_agent.py locally.
-  - Package source is configured via ROBOT_SDK_PACKAGE_SOURCE / ROBOT_SDK_INDEX_URL env vars.
+  - Infrastructure and package-source settings are loaded from ./.env.gcp.
 EOF
 }
+
+if [[ -f "$GCP_ENV_FILE" ]]; then
+  info "Loading GCP settings from $GCP_ENV_FILE"
+  set -a && source "$GCP_ENV_FILE" && set +a
+fi
+
+PROJECT_ID="${PROJECT_ID:-}"
+ZONE="${ZONE:-}"
+MACHINE_TYPE="${MACHINE_TYPE:-}"
+DISK_SIZE="${DISK_SIZE:-}"
+IMAGE_FAMILY="${IMAGE_FAMILY:-}"
+IMAGE_PROJECT="${IMAGE_PROJECT:-}"
+INSTANCE_PREFIX="${INSTANCE_PREFIX:-}"
+REMOTE_DIR="${REMOTE_DIR:-robot}"
+REMOTE_PORT="${REMOTE_PORT:-8765}"
+LOCAL_TUNNEL_PORT="${LOCAL_TUNNEL_PORT:-48765}"
+CPU_ONLY=true
+GPU_TYPE="${GPU_TYPE:-}"
+GPU_COUNT="${GPU_COUNT:-1}"
+GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-}"
+SDK_PACKAGE_SOURCE="${ROBOT_SDK_PACKAGE_SOURCE:-pypi}"
+SDK_INDEX_URL="${ROBOT_SDK_INDEX_URL:-}"
+SDK_EXTRA_INDEX_URL="${ROBOT_SDK_EXTRA_INDEX_URL:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -102,6 +108,13 @@ if ! command -v gcloud >/dev/null 2>&1; then
   exit 1
 fi
 
+for var in PROJECT_ID ZONE MACHINE_TYPE DISK_SIZE IMAGE_FAMILY IMAGE_PROJECT INSTANCE_PREFIX; do
+  if [[ -z "${!var:-}" ]]; then
+    error "$var must be set in $GCP_ENV_FILE"
+    exit 1
+  fi
+done
+
 SDK_VERSION="$(PYPROJECT_PATH="$PYPROJECT" python3 - <<'PY'
 import os, pathlib
 from typing import Any
@@ -120,18 +133,11 @@ if [[ "$SDK_VERSION" == "0.0.0" || -z "$SDK_VERSION" ]]; then
   exit 1
 fi
 
-GLOBAL_ENV_DIR="$REPO_ROOT/Product"
 ENV_FILE_LOCAL="$SCRIPT_DIR/.env"
-GLOBAL_ENV_FILE="${ROBOT_GCP_ENV_FILE:-}"
-
 ACTIVE_ENV_FILE="$ENV_FILE_LOCAL"
-if [[ -n "$GLOBAL_ENV_FILE" && -f "$GLOBAL_ENV_FILE" ]]; then
-  info "Using global env file $GLOBAL_ENV_FILE"
-  ACTIVE_ENV_FILE="$GLOBAL_ENV_FILE"
-fi
 
 if [[ ! -f "$ACTIVE_ENV_FILE" ]]; then
-  error "Missing env file. Expected $ENV_FILE_LOCAL${GLOBAL_ENV_FILE:+ or $GLOBAL_ENV_FILE}"
+  error "Missing runtime env file: $ENV_FILE_LOCAL"
   exit 1
 fi
 
