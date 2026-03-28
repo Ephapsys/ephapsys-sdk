@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import wave
+from io import BytesIO
 
 import cv2
 import numpy as np
@@ -114,6 +115,17 @@ class RobotBody:
         duration_s = len(audio) / float(sr)
         rms = float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
         return f"Heard {duration_s:.1f}s @ level {rms:.3f}"
+
+    @staticmethod
+    def audio_to_wav_bytes(audio: np.ndarray, samplerate: int = 16000) -> bytes:
+        buf = BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(samplerate)
+            pcm16 = np.clip(audio * 32767, -32768, 32767).astype("<i2")
+            wf.writeframes(pcm16.tobytes())
+        return buf.getvalue()
 
     async def mic_task(self):
         while not self.shutdown_event.is_set():

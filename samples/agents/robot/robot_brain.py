@@ -182,7 +182,8 @@ class RobotBrain:
 
                 self.face.set_state(hearing="Transcribing speech", event="Processing microphone input")
                 stt_started = time.perf_counter()
-                text_input = self.agent.run(mic_audio, model_kind="stt")
+                stt_audio = self.body.audio_to_wav_bytes(mic_audio)
+                text_input = self.agent.run(stt_audio, model_kind="stt")
                 stt_ms = (time.perf_counter() - stt_started) * 1000
                 self.face.set_state(hearing=self.face.clip_text(text_input or "No speech detected", 64))
 

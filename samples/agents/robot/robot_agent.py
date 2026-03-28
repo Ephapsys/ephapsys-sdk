@@ -24,6 +24,7 @@ except ImportError:
 
 import uvicorn
 
+from robot_brain_server import app
 from robot_face import run_terminal_face
 
 try:
@@ -57,7 +58,7 @@ async def main():
     port = int(os.getenv("ROBOT_BRAIN_PORT", "8765"))
     server = uvicorn.Server(
         uvicorn.Config(
-            "robot_brain_server:app",
+            app,
             host="127.0.0.1",
             port=port,
             log_level="warning",
