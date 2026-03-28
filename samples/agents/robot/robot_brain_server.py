@@ -51,11 +51,6 @@ async def _run_brain():
         brain_ready.clear()
 
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.get_running_loop().call_soon(_ensure_brain_task)
-
-
 @app.on_event("shutdown")
 async def shutdown_event_handler():
     shutdown_event.set()
@@ -66,11 +61,13 @@ async def shutdown_event_handler():
 
 @app.get("/health")
 async def health():
+    _ensure_brain_task()
     return {"ok": True, "ready": brain_ready.is_set(), "state": state_face.snapshot()}
 
 
 @app.websocket("/ws/state")
 async def ws_state(ws: WebSocket):
+    _ensure_brain_task()
     await ws.accept()
     try:
         while True:
