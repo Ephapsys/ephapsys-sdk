@@ -52,6 +52,21 @@ class RobotBody:
         self._last_hearing_update_at = now
         self.face.set_state(hearing=hearing, event=event)
 
+    def hearing_label(self, mode: str, level: float = 0.0, raw_speech: bool = False) -> str:
+        if mode == "armed":
+            return "Microphone armed"
+        if mode == "listening":
+            return "Listening for speech"
+        if mode == "detected":
+            return "Speech detected"
+        if mode == "capturing":
+            return "Capturing utterance"
+        if mode == "ending":
+            return "Finishing utterance"
+        if mode == "captured":
+            return self.summarize_audio(np.array([level], dtype="float32")) if level > 0 else "Speech captured"
+        return "Listening"
+
     def ensure_preprocessor(self, tts_path: str) -> bool:
         try:
             cfg_path = os.path.join(tts_path, "preprocessor_config.json")
@@ -102,9 +117,8 @@ class RobotBody:
                 level = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32) / 32768.0)))) if len(chunk) else 0.0
                 raw_speech = vad.is_speech(chunk.tobytes(), sr)
                 if not self.speech_enabled:
-                    vad_hint = "speech" if raw_speech else "noise"
                     self.set_hearing_state(
-                        hearing=f"Microphone armed @ level {self.format_level(level)} ({vad_hint})",
+                        hearing=self.hearing_label("armed"),
                         event="Greeting",
                     )
                     start_time = time.time()
@@ -129,9 +143,8 @@ class RobotBody:
                 if not heard_speech and speech_run >= speech_start_frames:
                     heard_speech = True
                     silence_count = 0
-                    speech_label = "Quiet speech detected" if quiet_speech and not is_speech else "Speech detected"
                     self.set_hearing_state(
-                        hearing=f"{speech_label} @ level {self.format_level(level)}",
+                        hearing=self.hearing_label("detected"),
                         event="Capturing utterance",
                         force=True,
                     )
@@ -142,9 +155,8 @@ class RobotBody:
                     continue
 
                 if heard_speech and active_speech:
-                    speech_label = "Quiet speech detected" if quiet_speech and not is_speech else "Speech detected"
                     self.set_hearing_state(
-                        hearing=f"{speech_label} @ level {self.format_level(level)}",
+                        hearing=self.hearing_label("capturing"),
                         event="Capturing utterance",
                     )
                     silence_count = 0
@@ -153,15 +165,14 @@ class RobotBody:
                     silence_count += 1
                     buffer.extend(chunk)
                     self.set_hearing_state(
-                        hearing=f"Listening for end of speech @ level {self.format_level(level)}",
+                        hearing=self.hearing_label("ending"),
                         event="Capturing utterance",
                     )
                     if silence_count > silence_limit:
                         break
                 else:
-                    vad_hint = "speech" if raw_speech else "noise"
                     self.set_hearing_state(
-                        hearing=f"Listening on microphone @ level {self.format_level(level)} ({vad_hint})",
+                        hearing=self.hearing_label("listening"),
                         event="Waiting for speech",
                     )
                     buffer.extend(chunk)
@@ -203,7 +214,7 @@ class RobotBody:
     async def mic_task(self):
         while not self.shutdown_event.is_set():
             try:
-                self.set_hearing_state("Listening on microphone", "Waiting for speech", force=True)
+                self.set_hearing_state(self.hearing_label("listening"), "Waiting for speech", force=True)
                 loop = asyncio.get_running_loop()
                 audio = await loop.run_in_executor(None, self.capture_microphone)
                 self.set_hearing_state(self.summarize_audio(audio), "Speech captured", force=True)
