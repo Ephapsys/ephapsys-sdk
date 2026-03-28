@@ -53,20 +53,19 @@ ENV_OVERRIDE_KEYS=(
   ROBOT_ENABLE_WORLD_MODEL
 )
 
+declare -A ENV_OVERRIDES=()
 for key in "${ENV_OVERRIDE_KEYS[@]}"; do
   if [[ -n "${!key+x}" ]]; then
-    printf -v "__PRESERVE_%s" "$key" '%s' "${!key}"
+    ENV_OVERRIDES["$key"]="${!key}"
   fi
 done
 
 [[ -f .env ]] && set -o allexport && source .env && set +o allexport
 
 for key in "${ENV_OVERRIDE_KEYS[@]}"; do
-  preserve_var="__PRESERVE_${key}"
-  if [[ -n "${!preserve_var+x}" ]]; then
-    printf -v "$key" '%s' "${!preserve_var}"
+  if [[ -n "${ENV_OVERRIDES[$key]+x}" ]]; then
+    printf -v "$key" '%s' "${ENV_OVERRIDES[$key]}"
     export "$key"
-    unset "$preserve_var"
   fi
 done
 
