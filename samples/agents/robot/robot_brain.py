@@ -20,14 +20,20 @@ class RobotBrain:
         self.index = faiss.IndexFlatL2(768)
         self.stored_responses = []
 
+    def log_stage(self, label: str, started_at: float):
+        self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
+
     def build_startup_greeting(self):
         vision_label = None
         try:
             self.face.set_state(vision="Looking for a first impression", reasoning="Observing the scene")
             frame = self.body.capture_startup_frame()
             if frame is not None:
+                t0 = time.perf_counter()
+                self.face.console_log.log("[brain] Loading startup vision model: Robot Vision Model (hustvl/yolos-base)")
                 vision_input = Image.fromarray(frame)
                 vision_raw = self.agent.run(vision_input, model_kind="vision")
+                self.log_stage("Startup vision ready", t0)
                 vision_label = str(vision_raw).strip() if vision_raw is not None else None
         except Exception as exc:
             self.face.console_log.log(f"Startup vision greeting fallback: {exc}")
@@ -43,7 +49,10 @@ class RobotBrain:
             prompt += " You do not yet have a clear visual classification."
 
         try:
+            t0 = time.perf_counter()
+            self.face.console_log.log("[brain] Loading startup language model: Robot Language Model (Qwen/Qwen3.5-0.8B)")
             greeting = str(self.agent.run(prompt, model_kind='language')).strip()
+            self.log_stage("Startup language greeting ready", t0)
         except Exception as exc:
             self.face.console_log.log(f"Startup language greeting fallback: {exc}")
             greeting = ""
@@ -101,7 +110,10 @@ class RobotBrain:
         self.face.console_live.print(f"[dim]Instance DID: {self.agent.agent_id}[/dim]")
 
         self.face.set_state(event="Preparing runtime bundles", reasoning="Loading secure model runtimes")
+        t0 = time.perf_counter()
+        self.face.console_log.log("[brain] Preparing runtime bundles")
         runtimes = self.agent.prepare_runtime()
+        self.log_stage("Runtime bundles prepared", t0)
         tts_path = (runtimes.get("tts") or {}).get("model_path")
         self.body.tts_available = self.body.ensure_preprocessor(tts_path) if tts_path else False
         self.face.set_state(
@@ -127,7 +139,10 @@ class RobotBrain:
         try:
             if self.face.agent_status.get("enabled", False) and not self.face.agent_status.get("revoked", False) and self.body.tts_available:
                 self.face.console_live.print("[green]✅ GREETING TTS...")
+                t0 = time.perf_counter()
+                self.face.console_log.log("[brain] Loading greeting TTS path: Robot TTS Model (microsoft/speecht5_tts)")
                 self.body.play_tts_sync(self.agent, greeting)
+                self.log_stage("Greeting TTS complete", t0)
                 self.face.console_live.print("[green]✅ GREETING TTS done.")
             else:
                 self.face.console_live.print("[red]❌ Skipping greeting TTS (agent not enabled or TTS assets missing)")
