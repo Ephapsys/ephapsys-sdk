@@ -36,7 +36,7 @@ There is now a second deployment shape for this sample:
 ## 🧩 Workflow
 
 1. **Verify agent status**
-   - If not yet personalized, run `personalize()` once with the chosen anchor (`tpm`, `tee`, or `dsim`).
+   - If not yet personalized, run `personalize()` once with a supported anchor (`tpm`, `hsm`, or `none` for local dev only).
    - If revoked or disabled, refuse to start.
 
 2. **Enter main loop**
