@@ -3409,19 +3409,28 @@ class TrustedAgent:
         except ImportError:
             raise RuntimeError("Transformers/torch not installed. `pip install transformers torch soundfile`")
 
-        with self._suppress_transformers_warnings():
-            processor = SpeechT5Processor.from_pretrained(model_path)
-            model = SpeechT5ForTextToSpeech.from_pretrained(model_path)
-        self._apply_ecm_if_available(model, runtime)
-        model = model.to(self._device())
+        processor = runtime.get("_tts_processor")
+        model = runtime.get("_tts_model")
+        vocoder = runtime.get("_tts_vocoder")
+        speaker_embeddings = runtime.get("_tts_speaker_embeddings")
+        if processor is None or model is None:
+            with self._suppress_transformers_warnings():
+                processor = SpeechT5Processor.from_pretrained(model_path)
+                model = SpeechT5ForTextToSpeech.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
+            runtime["_tts_processor"] = processor
+            runtime["_tts_model"] = model
+        if vocoder is None:
+            vocoder = self._load_tts_vocoder(runtime.get("vocoder_path") or model_path, SpeechT5HifiGan)
+            runtime["_tts_vocoder"] = vocoder
         inputs = processor(text=str(text), return_tensors="pt").to(self._device())
         # Some transformers versions require speaker_embeddings; provide a default if absent
-        speaker_embeddings = runtime.get("speaker_embeddings")
         if speaker_embeddings is None:
             speaker_embeddings_path = runtime.get("speaker_embeddings_path")
             speaker_embeddings = self._load_speaker_embeddings(model_path, model, speaker_embeddings_path)
+            runtime["_tts_speaker_embeddings"] = speaker_embeddings
         with torch.no_grad():
-            vocoder = self._load_tts_vocoder(runtime.get("vocoder_path") or model_path, SpeechT5HifiGan)
             waveform = model.generate_speech(
                 inputs["input_ids"],
                 speaker_embeddings=speaker_embeddings,
@@ -3548,22 +3557,32 @@ class TrustedAgent:
                 model_type = ""
 
         if model_type == "whisper":
-            with self._suppress_transformers_warnings():
-                processor = WhisperProcessor.from_pretrained(model_path)
-                model = WhisperForConditionalGeneration.from_pretrained(model_path)
-            self._apply_ecm_if_available(model, runtime)
-            model = model.to(self._device())
+            processor = runtime.get("_stt_processor")
+            model = runtime.get("_stt_model")
+            if processor is None or model is None:
+                with self._suppress_transformers_warnings():
+                    processor = WhisperProcessor.from_pretrained(model_path)
+                    model = WhisperForConditionalGeneration.from_pretrained(model_path)
+                self._apply_ecm_if_available(model, runtime)
+                model = model.to(self._device())
+                runtime["_stt_processor"] = processor
+                runtime["_stt_model"] = model
             processed = processor(waveform, sampling_rate=sr, return_tensors="pt")
             input_features = processed.input_features.to(self._device())
             with torch.no_grad():
                 pred_ids = model.generate(input_features=input_features)
             result = processor.batch_decode(pred_ids, skip_special_tokens=True)[0]
         else:
-            with self._suppress_transformers_warnings():
-                processor = Wav2Vec2Processor.from_pretrained(model_path)
-                model = Wav2Vec2ForCTC.from_pretrained(model_path)
-            self._apply_ecm_if_available(model, runtime)
-            model = model.to(self._device())
+            processor = runtime.get("_stt_processor")
+            model = runtime.get("_stt_model")
+            if processor is None or model is None:
+                with self._suppress_transformers_warnings():
+                    processor = Wav2Vec2Processor.from_pretrained(model_path)
+                    model = Wav2Vec2ForCTC.from_pretrained(model_path)
+                self._apply_ecm_if_available(model, runtime)
+                model = model.to(self._device())
+                runtime["_stt_processor"] = processor
+                runtime["_stt_model"] = model
             processed = processor(waveform, sampling_rate=sr, return_tensors="pt")
             input_values = processed.input_values.to(self._device())
             attention_mask = processed.attention_mask.to(self._device()) if hasattr(processed, "attention_mask") else None
