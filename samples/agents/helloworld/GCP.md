@@ -39,6 +39,7 @@ Interactive behavior:
 - `INTERACTIVE=1`
 
 GPU:
+- `USE_GPU=1`
 - `GPU_TYPE`
 - `GPU_COUNT`
 - `GPU_MACHINE_TYPE`
