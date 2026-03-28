@@ -41,6 +41,7 @@ Robot GCP mode deploys only the brain remotely. Your local machine still owns:
 ## Optional Settings
 
 GPU:
+- `USE_GPU=1`
 - `GPU_TYPE`
 - `GPU_COUNT`
 - `GPU_MACHINE_TYPE`
