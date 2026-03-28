@@ -378,8 +378,14 @@ class RobotBrain:
                         live.update(panel)
                         last_render_key = key
             except Exception as exc:
-                self.face.set_state(event=f"Processing error: {exc}", reasoning="Error")
-                self.face.console_log.log(f"Processing error: {exc}")
+                detail = str(exc).strip() or exc.__class__.__name__
+                self.face.set_state(event=f"Processing error: {detail}", reasoning="Error")
+                self.face.set_latest(
+                    self.face.latest.get("hearing", "-"),
+                    self.face.latest.get("vision", "-"),
+                    f"STT/turn failed: {detail}",
+                )
+                self.face.console_log.log(f"Processing error: {detail}")
                 self.face.console_log.log(traceback.format_exc())
             finally:
                 if event is not None:

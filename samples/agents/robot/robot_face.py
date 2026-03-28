@@ -300,30 +300,35 @@ async def run_terminal_face(ws_url: str):
     face.startup()
     last_key = None
 
-    async with websockets.connect(ws_url, max_size=None) as websocket:
-        first = json.loads(await websocket.recv())
-        snapshot = first.get("snapshot", first)
-        greeting = snapshot.get("latest", {}).get("reply") or "Asimov is starting..."
-        with face.live(greeting) as live:
-            while True:
-                payload = json.loads(await websocket.recv())
-                snapshot = payload.get("snapshot", payload)
-                face.agent_status.update(snapshot.get("agent_status", {}))
-                face.ui_state.update(snapshot.get("ui_state", {}))
-                face.latest.update(snapshot.get("latest", {}))
-                face.activity_log = snapshot.get("activity_log", [])
-                key = face.render_key(
-                    face.latest.get("hearing", "-"),
-                    face.latest.get("vision", "-"),
-                    face.latest.get("reply", "-"),
-                )
-                if key != last_key:
-                    live.update(
-                        face.render_status(
-                            face.latest.get("hearing", "-"),
-                            face.latest.get("vision", "-"),
-                            face.latest.get("reply", "-"),
-                        ),
-                        refresh=True,
+    try:
+        async with websockets.connect(ws_url, max_size=None) as websocket:
+            first = json.loads(await websocket.recv())
+            snapshot = first.get("snapshot", first)
+            greeting = snapshot.get("latest", {}).get("reply") or "Asimov is starting..."
+            with face.live(greeting) as live:
+                while True:
+                    payload = json.loads(await websocket.recv())
+                    snapshot = payload.get("snapshot", payload)
+                    face.agent_status.update(snapshot.get("agent_status", {}))
+                    face.ui_state.update(snapshot.get("ui_state", {}))
+                    face.latest.update(snapshot.get("latest", {}))
+                    face.activity_log = snapshot.get("activity_log", [])
+                    key = face.render_key(
+                        face.latest.get("hearing", "-"),
+                        face.latest.get("vision", "-"),
+                        face.latest.get("reply", "-"),
                     )
-                    last_key = key
+                    if key != last_key:
+                        live.update(
+                            face.render_status(
+                                face.latest.get("hearing", "-"),
+                                face.latest.get("vision", "-"),
+                                face.latest.get("reply", "-"),
+                            ),
+                            refresh=True,
+                        )
+                        last_key = key
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        return
+    except Exception:
+        raise

@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from contextlib import suppress
 
 try:
     import torch
@@ -103,13 +104,14 @@ async def main():
         await run_terminal_face(f"ws://127.0.0.1:{port}/ws/state")
     finally:
         server_proc.terminate()
-        try:
-            server_proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            server_proc.kill()
-        output_thread.join(timeout=1)
-        if log_sink is not sys.stderr:
-            log_sink.close()
+        with suppress(KeyboardInterrupt):
+            try:
+                server_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                server_proc.kill()
+            output_thread.join(timeout=1)
+            if log_sink is not sys.stderr:
+                log_sink.close()
 
 
 if __name__ == "__main__":
