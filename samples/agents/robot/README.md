@@ -3,6 +3,11 @@
 This sample demonstrates a simple **Robot Agent** built on the Ephapsys SDK.  
 The agent can **hear, see, think, and speak** using offline models after being verified and personalized through the TrustedAgent.
 
+The sample is structured as a small local `body + brain + face` demo:
+- `body` handles microphone, camera, and speaker I/O
+- `brain` owns runtime preparation, trusted verification, memory, and model orchestration
+- `face` is the terminal UI developers interact with today
+
 > ⚠️ **Important Requirements Before Running**  
 > This demo will not work out of the box unless you first prepare your Ephapsys environment:  
 > 
@@ -157,7 +162,10 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 
 ## 📂 Files
 
-- `robot_agent.py` → Main Python sample agent loop (mic until silence, cam frame every N seconds, FAISS memory).
+- `robot_agent.py` → Thin entrypoint that wires the sample together.
+- `robot_body.py` → Device/body layer for microphone, camera, and speaker I/O.
+- `robot_brain.py` → Runtime/brain layer for verification, orchestration, and memory.
+- `robot_face.py` → Terminal face layer for live developer feedback.
 - `quickstart.sh` → Creates `.env` if needed, bootstraps robot templates, then launches the sample.
 - `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh`.
 - `run.sh` → Public local run entrypoint that dispatches to `run_local.sh`.
