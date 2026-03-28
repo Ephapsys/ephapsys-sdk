@@ -138,7 +138,7 @@ class RobotFaceBase:
         if "composing" in reasoning or "running language" in self.ui_state.get("event", "").lower():
             return f"[yellow]{self.pulse(['◴', '◷', '◶', '◵'], 8)} thinking[/yellow]"
         if self.agent_status.get("enabled", False):
-            return "[green]● ready[/green]"
+            return "[green]● online[/green]"
         return "[cyan]◌ starting[/cyan]"
 
     def latency_text(self):
