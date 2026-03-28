@@ -4,8 +4,8 @@
 import asyncio
 import faulthandler
 import os
+import subprocess
 import sys
-import threading
 import time
 import urllib.request
 
@@ -22,9 +22,6 @@ try:
 except ImportError:
     sys.exit("[ERROR] Missing soundfile; install soundfile>=0.12.0 for TTS audio playback.")
 
-import uvicorn
-
-from robot_brain_server import app
 from robot_face import run_terminal_face
 
 try:
@@ -56,22 +53,30 @@ def wait_for_health(url: str, timeout_s: float = 20.0):
 
 async def main():
     port = int(os.getenv("ROBOT_BRAIN_PORT", "8765"))
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-        )
+    server_proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "robot_brain_server:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
     )
-    server.install_signal_handlers = lambda: None
-
-    server_thread = threading.Thread(target=server.run, daemon=True)
-    server_thread.start()
-    wait_for_health(f"http://127.0.0.1:{port}/health")
-    await run_terminal_face(f"ws://127.0.0.1:{port}/ws/state")
-    server.should_exit = True
-    server_thread.join(timeout=3)
+    try:
+        wait_for_health(f"http://127.0.0.1:{port}/health")
+        await run_terminal_face(f"ws://127.0.0.1:{port}/ws/state")
+    finally:
+        server_proc.terminate()
+        try:
+            server_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            server_proc.kill()
 
 
 if __name__ == "__main__":
