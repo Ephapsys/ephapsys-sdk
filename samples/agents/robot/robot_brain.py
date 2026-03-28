@@ -5,8 +5,6 @@ import os
 import sys
 import time
 
-import faiss
-import numpy as np
 from PIL import Image
 from ephapsys.agent import TrustedAgent
 
@@ -18,7 +16,6 @@ class RobotBrain:
         self.channel = channel
         self.shutdown_event = shutdown_event
         self.agent = TrustedAgent.from_env()
-        self.index = None
         self.stored_responses = []
 
     def log_stage(self, label: str, started_at: float):
@@ -308,31 +305,41 @@ class RobotBrain:
                 self.face.set_state(reasoning=self.face.clip_text(response_text or "No response generated", 64))
 
                 self.face.set_state(event="Updating memory")
-                embedding_started = time.perf_counter()
-                embedding_out = await self.run_blocking(self.agent.run, response_text, model_kind="embedding")
-                embedding_ms = (time.perf_counter() - embedding_started) * 1000
-                vec = np.array(embedding_out, dtype="float32").reshape(1, -1)
-                if vec.size == 0:
-                    self.face.set_state(event="Embedding unavailable")
-                    self.face.console_log.log("Empty embedding vector, skipping")
-                    continue
-                if self.index is None:
-                    self.index = faiss.IndexFlatL2(vec.shape[1])
-                    self.face.console_log.log(f"Initialized robot memory index with dim={vec.shape[1]}")
-                elif self.index.d != vec.shape[1]:
-                    self.face.console_log.log(
-                        f"Embedding dimension changed from {self.index.d} to {vec.shape[1]}; resetting memory index."
-                    )
-                    self.index = faiss.IndexFlatL2(vec.shape[1])
-                    self.stored_responses = []
+                # Disabled for the live sample path for now: FAISS-based semantic memory
+                # has been causing unstable shape/broadcast failures during interactive turns.
+                #
+                # embedding_started = time.perf_counter()
+                # embedding_out = await self.run_blocking(self.agent.run, response_text, model_kind="embedding")
+                # embedding_ms = (time.perf_counter() - embedding_started) * 1000
+                # vec = np.array(embedding_out, dtype="float32").reshape(1, -1)
+                # if vec.size == 0:
+                #     self.face.set_state(event="Embedding unavailable")
+                #     self.face.console_log.log("Empty embedding vector, skipping")
+                #     continue
+                # if self.index is None:
+                #     self.index = faiss.IndexFlatL2(vec.shape[1])
+                #     self.face.console_log.log(f"Initialized robot memory index with dim={vec.shape[1]}")
+                # elif self.index.d != vec.shape[1]:
+                #     self.face.console_log.log(
+                #         f"Embedding dimension changed from {self.index.d} to {vec.shape[1]}; resetting memory index."
+                #     )
+                #     self.index = faiss.IndexFlatL2(vec.shape[1])
+                #     self.stored_responses = []
+                #
+                # memory_context = ""
+                # if self.index.ntotal > 0:
+                #     _, ids = self.index.search(vec, k=1)
+                #     memory_context = f" Previously: {self.stored_responses[ids[0][0]]}"
+                # self.index.add(vec)
+                # self.stored_responses.append(response_text)
+                # self.face.set_state(memory=f"{self.index.ntotal} memories")
 
                 memory_context = ""
-                if self.index.ntotal > 0:
-                    _, ids = self.index.search(vec, k=1)
-                    memory_context = f" Previously: {self.stored_responses[ids[0][0]]}"
-                self.index.add(vec)
+                if self.stored_responses:
+                    memory_context = f" Previously: {self.stored_responses[-1]}"
                 self.stored_responses.append(response_text)
-                self.face.set_state(memory=f"{self.index.ntotal} memories")
+                self.stored_responses = self.stored_responses[-8:]
+                self.face.set_state(memory=f"{len(self.stored_responses)} memories")
 
                 augmented_text = response_text + memory_context
                 turn_ms = (time.perf_counter() - turn_started) * 1000
@@ -341,12 +348,12 @@ class RobotBrain:
                     "stt": stt_ms,
                     "vision": vision_ms if vision_ms > 0 else None,
                     "language": language_ms,
-                    "embedding": embedding_ms,
+                    "embedding": None,
                 }
                 self.face.set_state(latency=latency)
                 self.face.console_log.log(
                     f"Latency turn={turn_ms:.0f} stt={stt_ms:.0f} vision={vision_ms:.0f} "
-                    f"lang={language_ms:.0f} embed={embedding_ms:.0f}"
+                    f"lang={language_ms:.0f}"
                 )
 
                 if self.body.tts_available:
