@@ -3070,71 +3070,81 @@ class TrustedAgent:
         except ImportError:
             raise RuntimeError("Transformers not installed. `pip install transformers`")
 
-        logger.debug("[SDK][Language] Loading model from %s", model_path)
+        tok = runtime.get("_language_tokenizer")
+        cfg = runtime.get("_language_config")
+        model = runtime.get("_language_model")
+        model_cls = runtime.get("_language_model_cls")
 
-        with self._suppress_transformers_warnings():
-            tok = AutoTokenizer.from_pretrained(model_path)
-            cfg = AutoConfig.from_pretrained(model_path)
-        logger.debug("[SDK][Language] Detected model_type=%s", cfg.model_type)
+        if tok is None or cfg is None or model is None or model_cls is None:
+            logger.debug("[SDK][Language] Loading model from %s", model_path)
 
-        # Some checkpoints (e.g., Gemma3) strongly recommend eager attention
-        model_id = (runtime.get("id") or runtime.get("model_id") or "").lower()
-        eager_models = (cfg.model_type or "").lower() in {"gemma", "gemma2", "gemma3"}
-        eager_models = eager_models or ("gemma" in cfg.__class__.__name__.lower())
-        eager_models = eager_models or ("gemma" in model_id)
-        if eager_models and hasattr(cfg, "attn_implementation"):
-            attn_impl = getattr(cfg, "attn_implementation", None)
-            if not attn_impl or str(attn_impl).lower() == "sdpa":
-                setattr(cfg, "attn_implementation", "eager")
-                logger.debug("[SDK][Language] Forcing attn_implementation='eager' for %s", cfg.model_type)
-
-        if cfg.model_type in ("t5", "mt5", "bart", "mbart", "pegasus", "prophetnet", "marian"):
-            logger.debug("[SDK][Language] → Using AutoModelForSeq2SeqLM")
-            model_cls = AutoModelForSeq2SeqLM
-        else:
-            logger.debug("[SDK][Language] → Using AutoModelForCausalLM")
-            model_cls = AutoModelForCausalLM
-
-        state_dict = self._load_model_state_dict(model_path)
-        can_init_from_config = True
-        if getattr(cfg, "text_config", None) is not None and not hasattr(cfg, "vocab_size"):
-            # Some newer multimodal/text-wrapped configs (e.g. Qwen 3.5) keep
-            # text-only fields like vocab_size under text_config, which breaks
-            # AutoModelForCausalLM.from_config(cfg). The local from_pretrained
-            # path already handles these configs correctly.
-            can_init_from_config = False
-
-        if state_dict and can_init_from_config:
             with self._suppress_transformers_warnings():
-                model = model_cls.from_config(cfg)
-            # Install ECM hooks/parameters before weights are loaded so state_dict restores λ without warnings
-            self._apply_ecm_if_available(model, runtime, install_only=True)
-            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-            if missing_keys:
-                logger.debug("[SDK][Language] Missing keys after load: %s", missing_keys)
-            if unexpected_keys:
-                logger.debug("[SDK][Language] Unexpected keys after load: %s", unexpected_keys)
-            model.to(self._device())
-        else:
-            if state_dict and not can_init_from_config:
-                logger.debug(
-                    "[SDK][Language] Config %s is not compatible with from_config; using from_pretrained fallback",
-                    cfg.__class__.__name__,
-                )
-            if state_dict:
-                logger.debug(
-                    "[SDK][Language] Using local from_pretrained load path for %s",
-                    model_path,
-                )
+                tok = AutoTokenizer.from_pretrained(model_path)
+                cfg = AutoConfig.from_pretrained(model_path)
+            logger.debug("[SDK][Language] Detected model_type=%s", cfg.model_type)
+
+            # Some checkpoints (e.g., Gemma3) strongly recommend eager attention
+            model_id = (runtime.get("id") or runtime.get("model_id") or "").lower()
+            eager_models = (cfg.model_type or "").lower() in {"gemma", "gemma2", "gemma3"}
+            eager_models = eager_models or ("gemma" in cfg.__class__.__name__.lower())
+            eager_models = eager_models or ("gemma" in model_id)
+            if eager_models and hasattr(cfg, "attn_implementation"):
+                attn_impl = getattr(cfg, "attn_implementation", None)
+                if not attn_impl or str(attn_impl).lower() == "sdpa":
+                    setattr(cfg, "attn_implementation", "eager")
+                    logger.debug("[SDK][Language] Forcing attn_implementation='eager' for %s", cfg.model_type)
+
+            if cfg.model_type in ("t5", "mt5", "bart", "mbart", "pegasus", "prophetnet", "marian"):
+                logger.debug("[SDK][Language] → Using AutoModelForSeq2SeqLM")
+                model_cls = AutoModelForSeq2SeqLM
             else:
-                logger.warning(
-                    "[SDK][Language] Could not locate state dict under %s; falling back to from_pretrained",
-                    model_path,
-                )
-            with self._suppress_transformers_warnings():
-                model = model_cls.from_pretrained(model_path, config=cfg).to(self._device())
+                logger.debug("[SDK][Language] → Using AutoModelForCausalLM")
+                model_cls = AutoModelForCausalLM
 
-        self._apply_ecm_if_available(model, runtime)
+            state_dict = self._load_model_state_dict(model_path)
+            can_init_from_config = True
+            if getattr(cfg, "text_config", None) is not None and not hasattr(cfg, "vocab_size"):
+                # Some newer multimodal/text-wrapped configs (e.g. Qwen 3.5) keep
+                # text-only fields like vocab_size under text_config, which breaks
+                # AutoModelForCausalLM.from_config(cfg). The local from_pretrained
+                # path already handles these configs correctly.
+                can_init_from_config = False
+
+            if state_dict and can_init_from_config:
+                with self._suppress_transformers_warnings():
+                    model = model_cls.from_config(cfg)
+                # Install ECM hooks/parameters before weights are loaded so state_dict restores λ without warnings
+                self._apply_ecm_if_available(model, runtime, install_only=True)
+                missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+                if missing_keys:
+                    logger.debug("[SDK][Language] Missing keys after load: %s", missing_keys)
+                if unexpected_keys:
+                    logger.debug("[SDK][Language] Unexpected keys after load: %s", unexpected_keys)
+                model.to(self._device())
+            else:
+                if state_dict and not can_init_from_config:
+                    logger.debug(
+                        "[SDK][Language] Config %s is not compatible with from_config; using from_pretrained fallback",
+                        cfg.__class__.__name__,
+                    )
+                if state_dict:
+                    logger.debug(
+                        "[SDK][Language] Using local from_pretrained load path for %s",
+                        model_path,
+                    )
+                else:
+                    logger.warning(
+                        "[SDK][Language] Could not locate state dict under %s; falling back to from_pretrained",
+                        model_path,
+                    )
+                with self._suppress_transformers_warnings():
+                    model = model_cls.from_pretrained(model_path, config=cfg).to(self._device())
+
+            self._apply_ecm_if_available(model, runtime)
+            runtime["_language_tokenizer"] = tok
+            runtime["_language_config"] = cfg
+            runtime["_language_model"] = model
+            runtime["_language_model_cls"] = model_cls
 
         model_cfg = runtime.get("config") or {}
         generation_cfg = model_cfg.get("generation") or {}
