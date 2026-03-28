@@ -65,6 +65,7 @@ GPU_TYPE="${GPU_TYPE:-}"
 GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-}"
 GPU_COUNT="${GPU_COUNT:-1}"
 GPU_IMAGE_FAMILY="${GPU_IMAGE_FAMILY:-}"
+USE_GPU="${USE_GPU:-0}"
 SDK_PACKAGE_SOURCE="${SDK_PACKAGE_SOURCE:-${HELLOWORLD_SDK_PACKAGE_SOURCE:-pypi}}"
 SDK_INDEX_URL="${SDK_INDEX_URL:-${HELLOWORLD_SDK_INDEX_URL:-}}"
 SDK_EXTRA_INDEX_URL="${SDK_EXTRA_INDEX_URL:-${HELLOWORLD_SDK_EXTRA_INDEX_URL:-}}"
@@ -103,6 +104,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$USE_GPU" == "1" || "$USE_GPU" == "true" || "$USE_GPU" == "yes" ]]; then
+  CPU_ONLY=false
+fi
 
 RAW_ANCHOR="${PERSONALIZE_ANCHOR:-none}"
 ANCHOR_SUFFIX="$(echo "$RAW_ANCHOR" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
