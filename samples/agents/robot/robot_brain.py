@@ -21,7 +21,15 @@ class RobotBrain:
 
     async def startup(self):
         self.face.startup()
+        self.face.set_state(
+            hearing="Stand by",
+            vision="Stand by",
+            reasoning="Verifying agent",
+            speaking="Stand by",
+            event="Starting brain",
+        )
         try:
+            self.face.set_state(event="Verifying agent", reasoning="Checking trusted state")
             ok, _ = self.agent.verify()
         except RuntimeError as exc:
             if "404" in str(exc):
@@ -35,7 +43,7 @@ class RobotBrain:
             is_personalized = status.get("state", {}).get("personalized", False) or status.get("personalized", False)
             if not is_personalized:
                 anchor = os.getenv("PERSONALIZE_ANCHOR")
-                self.face.set_state(event="Personalizing agent instance")
+                self.face.set_state(event="Personalizing agent instance", reasoning="Binding device identity")
                 self.face.console_live.print(
                     f"[yellow]Agent not personalized; running personalize(anchor={anchor})...[/yellow]"
                 )
@@ -55,15 +63,18 @@ class RobotBrain:
         is_enabled = status.get("enabled", False) or (status.get("status", "").lower() == "enabled")
         is_revoked = status.get("state", {}).get("revoked", False)
         self.face.agent_status.update({"verified": ok, "enabled": is_enabled, "revoked": is_revoked})
-        self.face.set_state(event="Agent verified", reasoning="Ready")
+        self.face.set_state(event="Agent verified", reasoning="Trusted runtime ready")
         self.face.console_live.print("[green]✅ Agent personalized and verified.[/green]")
         self.face.console_live.print(f"[dim]Instance DID: {self.agent.agent_id}[/dim]")
 
-        self.face.set_state(event="Preparing runtime bundles")
+        self.face.set_state(event="Preparing runtime bundles", reasoning="Loading secure model runtimes")
         runtimes = self.agent.prepare_runtime()
         tts_path = (runtimes.get("tts") or {}).get("model_path")
         self.body.tts_available = self.body.ensure_preprocessor(tts_path) if tts_path else False
         self.face.set_state(
+            hearing="Listening on microphone",
+            vision="Scanning scene",
+            reasoning="Waiting for input",
             speaking="Ready" if self.body.tts_available else "Unavailable",
             memory="0 memories",
             event=f"Runtime ready: {', '.join(sorted(runtimes.keys()))}",
@@ -95,7 +106,7 @@ class RobotBrain:
 
         self.face.set_state(
             hearing="Listening on microphone",
-            vision="Scanning",
+            vision="Scanning scene",
             reasoning="Waiting for input",
             speaking="Idle" if self.body.tts_available else "Unavailable",
             event="Live interaction loop started",
