@@ -54,6 +54,9 @@ if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
 fi
 
 SDK_PATH="../../../sdk/python"
+if [ -d "$SDK_PATH" ] && [ "${ROBOT_USE_LOCAL_SDK:-}" = "" ]; then
+  export ROBOT_USE_LOCAL_SDK=1
+fi
 if ! python3 -c "import fastapi, uvicorn, websockets" >/dev/null 2>&1; then
   info "Installing robot sample-local requirements"
   PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install -r requirements.txt --quiet

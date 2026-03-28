@@ -3496,6 +3496,7 @@ class TrustedAgent:
         audio_input = enforced_input
 
         try:
+            import io
             import numpy as np
             import torch
             from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
@@ -3511,6 +3512,19 @@ class TrustedAgent:
 
         if isinstance(audio_input, str):
             waveform, sr = librosa.load(audio_input, sr=16000)
+        elif isinstance(audio_input, (bytes, bytearray)):
+            try:
+                import soundfile as sf
+
+                waveform, sr = sf.read(io.BytesIO(audio_input), dtype="float32")
+                if hasattr(waveform, "ndim") and waveform.ndim > 1:
+                    waveform = waveform.mean(axis=1)
+                if sr != 16000:
+                    waveform = librosa.resample(np.asarray(waveform), orig_sr=sr, target_sr=16000)
+                    sr = 16000
+            except Exception:
+                waveform = np.frombuffer(audio_input, dtype=np.int16).astype("float32") / 32768.0
+                sr = 16000
         else:
             waveform = audio_input.numpy() if hasattr(audio_input, "numpy") else np.asarray(audio_input)
             sr = 16000
