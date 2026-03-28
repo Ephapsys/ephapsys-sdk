@@ -44,10 +44,12 @@ class RobotBrain:
         self.language_warm_task = None
         self.reasoning_queue: asyncio.Queue = asyncio.Queue()
         self.output_queue: asyncio.Queue = asyncio.Queue()
+        self.tts_done_event = asyncio.Event()
         # Live per-turn vision is enabled by default again for the robot demo.
         # It can still be disabled explicitly via env when debugging other paths.
         self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
         self.world_enabled = os.getenv("ROBOT_ENABLE_WORLD_MODEL", "1").lower() not in ("0", "false", "no")
+        self.body_mode = os.getenv("ROBOT_BODY_MODE", "local").strip().lower()
 
     def set_governor_state(self, decision):
         self.face.set_state(governor=f"{'ALLOW' if decision.allowed else 'BLOCK'}: {decision.reason}")
@@ -120,6 +122,8 @@ class RobotBrain:
         return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
     def build_startup_scene_observation(self):
+        if self.body_mode == "remote":
+            return None
         vision_label = None
         try:
             self.face.set_state(vision="Looking for a first impression", reasoning="Observing the scene")
@@ -312,16 +316,12 @@ class RobotBrain:
                 speaking="Queued for startup greeting",
                 event="Greeting",
             )
+            self.tts_done_event.clear()
             await self.channel.send_command("speak", text=greeting)
-            while not self.shutdown_event.is_set():
-                event = await self.channel.next_event(timeout=0.25)
-                if event is None:
-                    continue
-                try:
-                    if event.kind == "tts_done":
-                        break
-                finally:
-                    self.channel.event_done()
+            try:
+                await asyncio.wait_for(self.tts_done_event.wait(), timeout=30.0)
+            except asyncio.TimeoutError:
+                self.face.console_log.log("Startup greeting did not receive tts_done before timeout")
         self.body.speech_enabled = True
         if self.language_warm_task is None:
             self.language_warm_task = asyncio.create_task(self.warm_language_runtime())
@@ -371,6 +371,7 @@ class RobotBrain:
                 continue
             try:
                 if event.kind == "tts_done":
+                    self.tts_done_event.set()
                     await self.emit_reasoning_event(SystemFact(name="tts_done", payload=event.payload))
                 elif event.kind == "body_control_done":
                     await self.emit_reasoning_event(SystemFact(name="body_control_done", payload=event.payload))
