@@ -4,18 +4,20 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
+  ./run.sh
   ./run.sh --local
   ./run.sh --local smoke
   ./run.sh --gcp [other run_gcp.sh flags]
 
 Notes:
-  --local launches the robot sample locally
+  no flag defaults to launching the robot sample locally
+  --local launches the robot sample locally explicitly
   --local smoke runs the existing local smoke check only
   --gcp provisions the brain remotely and keeps body + terminal local
 EOF
 }
 
-MODE=""
+MODE="local"
 ACTION="run"
 ARGS=()
 
@@ -51,11 +53,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-if [[ -z "$MODE" ]]; then
-  usage
-  exit 1
-fi
 
 if [[ "$MODE" == "local" ]]; then
   case "${ARGS[*]:-}" in
