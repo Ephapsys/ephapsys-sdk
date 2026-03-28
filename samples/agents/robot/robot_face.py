@@ -64,14 +64,14 @@ class RobotFaceBase:
             "Preparing runtime bundles",
             "Agent verified",
         }:
-            return "[cyan]STARTING[/cyan]"
+            return ("STARTING", "cyan")
         if self.agent_status.get("revoked", False):
-            return "[red]REVOKED[/red]"
+            return ("REVOKED", "red")
         if not self.agent_status.get("enabled", False):
-            return "[red]DISABLED[/red]"
+            return ("DISABLED", "red")
         if not self.agent_status.get("verified", False):
-            return "[yellow]VERIFYING[/yellow]"
-        return "[green]ENABLED[/green]"
+            return ("VERIFYING", "yellow")
+        return ("ENABLED", "green")
 
     def snapshot(self):
         return {
@@ -157,8 +157,10 @@ class RobotFace(RobotFaceBase):
         systems.append_text(self.meter(speaking_level, color="magenta"))
 
         state = Text()
+        status_label, status_style = self.format_status()
         state.append("Status    ", style="bold white")
-        state.append(f"{self.format_status()}\n")
+        state.append(status_label, style=status_style)
+        state.append("\n")
         state.append("Event     ", style="bold white")
         state.append(f"{self.clip_text(self.ui_state['event'], 48)}\n")
         state.append("Memory    ", style="bold white")
