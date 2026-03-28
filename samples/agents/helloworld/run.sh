@@ -4,21 +4,23 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
+  ./run.sh
   ./run.sh --local
   ./run.sh --gcp [other run_gcp.sh flags]
 
 Examples:
-  ./run.sh --local
+  ./run.sh
   ./run.sh --gcp
   ./run.sh --gcp --gpu --gpu-type t4
 
 Notes:
-  --local runs preflight automatically, then launches ./run_local.sh
+  no flag defaults to local and runs preflight automatically, then launches ./run_local.sh
+  --local does the same explicitly
   --gcp dispatches to ./run_gcp.sh
 EOF
 }
 
-MODE=""
+MODE="local"
 ARGS=()
 ARGS_COUNT=0
 
