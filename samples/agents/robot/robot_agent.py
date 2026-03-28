@@ -6,6 +6,7 @@ import faulthandler
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -51,6 +52,20 @@ def wait_for_health(url: str, timeout_s: float = 20.0):
     raise RuntimeError(f"Robot brain did not become healthy in time: {last_error}")
 
 
+def stream_subprocess_output(pipe, sink):
+    try:
+        for line in iter(pipe.readline, ""):
+            if not line:
+                break
+            sink.write(f"[brain] {line}")
+            sink.flush()
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
 async def main():
     port = int(os.getenv("ROBOT_BRAIN_PORT", "8765"))
     server_proc = subprocess.Popen(
@@ -67,7 +82,17 @@ async def main():
             "warning",
         ],
         cwd=os.path.dirname(os.path.abspath(__file__)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
+    output_thread = threading.Thread(
+        target=stream_subprocess_output,
+        args=(server_proc.stdout, sys.stderr),
+        daemon=True,
+    )
+    output_thread.start()
     try:
         wait_for_health(f"http://127.0.0.1:{port}/health")
         await run_terminal_face(f"ws://127.0.0.1:{port}/ws/state")
@@ -77,6 +102,7 @@ async def main():
             server_proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             server_proc.kill()
+        output_thread.join(timeout=1)
 
 
 if __name__ == "__main__":
