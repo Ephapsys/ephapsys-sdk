@@ -97,6 +97,19 @@ ROBOT_WORLD_REPO="${ROBOT_WORLD_REPO:-facebook/vjepa2-vitl-fpc64-256}"
 ROBOT_WORLD_NAME="${ROBOT_WORLD_NAME:-Robot World Model}"
 ROBOT_ENABLE_WORLD_MODEL="${ROBOT_ENABLE_WORLD_MODEL:-0}"
 
+trim_inline() {
+  local value="${1-}"
+  value="${value//$'\r'/}"
+  value="${value//$'\n'/}"
+  printf '%s' "$value"
+}
+
+BASE_URL="$(trim_inline "$BASE_URL")"
+CLI_API="$(trim_inline "$CLI_API")"
+API_TOKEN="$(trim_inline "$API_TOKEN")"
+HF_TOKEN="$(trim_inline "$HF_TOKEN")"
+ROBOT_ENABLE_WORLD_MODEL="$(trim_inline "$ROBOT_ENABLE_WORLD_MODEL")"
+
 MODEL_SPEC_JSON="$(jq -n \
   --arg tts_repo "$ROBOT_TTS_REPO" --arg tts_name "$ROBOT_TTS_NAME" \
   --arg voc_repo "$ROBOT_VOCODER_REPO" --arg voc_name "$ROBOT_VOCODER_NAME" \
@@ -145,9 +158,11 @@ cli_login() {
   if [[ -f "$SESSION_FILE" ]]; then
     token=$(jq -r '.token // empty' "$SESSION_FILE" 2>/dev/null || true)
     session_base_url=$(jq -r '.base_url // empty' "$SESSION_FILE" 2>/dev/null || true)
+    token="$(trim_inline "$token")"
+    session_base_url="$(trim_inline "$session_base_url")"
     if [[ -n "$token" ]]; then
       local code
-      code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" "$CLI_API/models/list")
+      code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" "$CLI_API/models/list" 2>/dev/null || true)
       if [[ "$code" == "200" ]]; then
         info "Reusing CLI session from ~/.ephapsys_state/session.json" >&2
         printf '%s' "$token"
@@ -160,8 +175,9 @@ cli_login() {
   fi
   if [[ -f "$CLI_TOKEN_FILE" ]]; then
     token=$(cat "$CLI_TOKEN_FILE")
+    token="$(trim_inline "$token")"
     local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" "$CLI_API/models/list")
+    code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" "$CLI_API/models/list" 2>/dev/null || true)
     if [[ "$code" == "200" ]]; then
       info "Reusing cached CLI token from .cli_token" >&2
       printf '%s' "$token"
@@ -184,6 +200,7 @@ cli_login() {
     -H "Content-Type: application/json" \
     -d "{\"username\":\"${cli_user}\",\"password\":\"${cli_pass}\"}")
   token=$(echo "$login_resp" | jq -r '.token // empty')
+  token="$(trim_inline "$token")"
   if [[ -z "$token" ]]; then
     error "CLI login failed"
     echo "$login_resp" >&2
@@ -198,6 +215,7 @@ cli_login() {
 }
 
 TOKEN="$(cli_login)"
+TOKEN="$(trim_inline "$TOKEN")"
 
 AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
 CLI_HEADER=(-H "Authorization: Bearer ${TOKEN}")
