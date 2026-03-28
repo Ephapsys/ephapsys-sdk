@@ -18,7 +18,7 @@ class RobotBrain:
         self.channel = channel
         self.shutdown_event = shutdown_event
         self.agent = TrustedAgent.from_env()
-        self.index = faiss.IndexFlatL2(768)
+        self.index = None
         self.stored_responses = []
 
     def log_stage(self, label: str, started_at: float):
@@ -316,6 +316,15 @@ class RobotBrain:
                     self.face.set_state(event="Embedding unavailable")
                     self.face.console_log.log("Empty embedding vector, skipping")
                     continue
+                if self.index is None:
+                    self.index = faiss.IndexFlatL2(vec.shape[1])
+                    self.face.console_log.log(f"Initialized robot memory index with dim={vec.shape[1]}")
+                elif self.index.d != vec.shape[1]:
+                    self.face.console_log.log(
+                        f"Embedding dimension changed from {self.index.d} to {vec.shape[1]}; resetting memory index."
+                    )
+                    self.index = faiss.IndexFlatL2(vec.shape[1])
+                    self.stored_responses = []
 
                 memory_context = ""
                 if self.index.ntotal > 0:
