@@ -64,6 +64,7 @@ async def main():
             log_level="warning",
         )
     )
+    server.install_signal_handlers = lambda: None
 
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()

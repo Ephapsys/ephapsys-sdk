@@ -7,6 +7,7 @@ import time
 
 import faiss
 import numpy as np
+from PIL import Image
 from ephapsys.agent import TrustedAgent
 
 
@@ -25,7 +26,8 @@ class RobotBrain:
             self.face.set_state(vision="Looking for a first impression", reasoning="Observing the scene")
             frame = self.body.capture_startup_frame()
             if frame is not None:
-                vision_raw = self.agent.run(frame, model_kind="vision")
+                vision_input = Image.fromarray(frame)
+                vision_raw = self.agent.run(vision_input, model_kind="vision")
                 vision_label = str(vision_raw).strip() if vision_raw is not None else None
         except Exception as exc:
             self.face.console_log.log(f"Startup vision greeting fallback: {exc}")
@@ -226,7 +228,8 @@ class RobotBrain:
                 if cam_frame is not None:
                     self.face.set_state(vision="Analyzing scene", event="Running vision model")
                     vision_started = time.perf_counter()
-                    vision_raw = self.agent.run(cam_frame, model_kind="vision")
+                    vision_input = Image.fromarray(cam_frame)
+                    vision_raw = self.agent.run(vision_input, model_kind="vision")
                     vision_ms = (time.perf_counter() - vision_started) * 1000
                     vision_label = str(vision_raw).strip() if vision_raw is not None else None
                     self.face.set_state(vision=self.face.clip_text(vision_label or "No scene update", 64))
