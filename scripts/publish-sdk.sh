@@ -77,7 +77,11 @@ ensure_tools_venv() {
     info "Creating release tooling virtualenv at $TOOLS_VENV"
     python3 -m venv "$TOOLS_VENV"
   fi
-  "$TOOLS_PYTHON" -m pip "${PIP_FLAGS[@]}" install -U pip setuptools wheel build twine tomli_w
+  if [[ ${#PIP_FLAGS[@]:-0} -gt 0 ]]; then
+    "$TOOLS_PYTHON" -m pip "${PIP_FLAGS[@]}" install -U pip setuptools wheel build twine tomli_w
+  else
+    "$TOOLS_PYTHON" -m pip install -U pip setuptools wheel build twine tomli_w
+  fi
 }
 
 ensure_toml_writer() {
@@ -89,7 +93,11 @@ except ModuleNotFoundError:
     raise SystemExit(1)
 PY
   if [[ $? -ne 0 ]]; then
-    "$TOOLS_PYTHON" -m pip "${PIP_FLAGS[@]}" install tomli_w >/dev/null 2>&1 || "$TOOLS_PYTHON" -m pip install tomli_w
+    if [[ ${#PIP_FLAGS[@]:-0} -gt 0 ]]; then
+      "$TOOLS_PYTHON" -m pip "${PIP_FLAGS[@]}" install tomli_w >/dev/null 2>&1 || "$TOOLS_PYTHON" -m pip install tomli_w
+    else
+      "$TOOLS_PYTHON" -m pip install tomli_w
+    fi
   fi
 }
 
