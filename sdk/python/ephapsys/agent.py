@@ -3530,12 +3530,29 @@ class TrustedAgent:
             sr = 16000
 
         processed = processor(waveform, sampling_rate=sr, return_tensors="pt")
+        model_forward_params = set(getattr(model.forward, "__code__", None).co_varnames if hasattr(model.forward, "__code__") else [])
+        tensor_inputs = {}
         if hasattr(processed, "input_values"):
-            model_inputs = {"input_values": processed.input_values.to(self._device())}
-        elif hasattr(processed, "input_features"):
-            model_inputs = {"input_features": processed.input_features.to(self._device())}
-        else:
+            tensor_inputs["input_values"] = processed.input_values.to(self._device())
+        if hasattr(processed, "input_features"):
+            tensor_inputs["input_features"] = processed.input_features.to(self._device())
+        if hasattr(processed, "attention_mask"):
+            tensor_inputs["attention_mask"] = processed.attention_mask.to(self._device())
+        if not tensor_inputs:
             raise RuntimeError("STT processor output missing input_values/input_features")
+
+        if "input_values" in model_forward_params:
+            primary = tensor_inputs.get("input_values") or tensor_inputs.get("input_features")
+            model_inputs = {"input_values": primary}
+        elif "input_features" in model_forward_params:
+            primary = tensor_inputs.get("input_features") or tensor_inputs.get("input_values")
+            model_inputs = {"input_features": primary}
+        else:
+            primary_key, primary_value = next(iter(tensor_inputs.items()))
+            model_inputs = {primary_key: primary_value}
+
+        if "attention_mask" in model_forward_params and "attention_mask" in tensor_inputs:
+            model_inputs["attention_mask"] = tensor_inputs["attention_mask"]
         with torch.no_grad():
             logits = model(**model_inputs).logits
             pred_ids = logits.argmax(dim=-1)
