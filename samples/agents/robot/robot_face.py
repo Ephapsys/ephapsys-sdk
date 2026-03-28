@@ -27,6 +27,9 @@ class RobotFaceBase:
             "hearing": "Stand by",
             "vision": "Stand by",
             "world": "Stand by",
+            "body": "Stand by",
+            "tools": "Idle",
+            "governor": "Ready",
             "reasoning": "Starting brain",
             "speaking": "Stand by",
             "memory": "0 memories",
@@ -199,6 +202,12 @@ class RobotFace(RobotFaceBase):
         state.append(f"{self.inline_text(self.ui_state['vision'], status_width)}\n")
         state.append("World     ", style="bold bright_green")
         state.append(f"{self.inline_text(self.ui_state['world'], status_width)}\n")
+        state.append("Body      ", style="bold blue")
+        state.append(f"{self.inline_text(self.ui_state['body'], status_width)}\n")
+        state.append("Tools     ", style="bold white")
+        state.append(f"{self.inline_text(self.ui_state['tools'], status_width)}\n")
+        state.append("Governor  ", style="bold red")
+        state.append(f"{self.inline_text(self.ui_state['governor'], status_width)}\n")
         state.append("Reasoning ", style="bold yellow")
         state.append(f"{self.inline_text(self.ui_state['reasoning'], status_width)}\n")
         state.append("Speaking  ", style="bold magenta")

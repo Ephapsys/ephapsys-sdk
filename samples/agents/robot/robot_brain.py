@@ -10,6 +10,7 @@ import numpy as np
 
 from PIL import Image
 from ephapsys.agent import TrustedAgent
+from robot_arch import RobotGovernor, RobotIntent, RobotToolbox, body_intent_for_world, classify_tool_intent
 
 
 class RobotBrain:
@@ -19,6 +20,11 @@ class RobotBrain:
         self.channel = channel
         self.shutdown_event = shutdown_event
         self.agent = TrustedAgent.from_env()
+        self.governor = RobotGovernor(
+            allow_body_control=os.getenv("ROBOT_ALLOW_BODY_CONTROL", "1").lower() not in ("0", "false", "no"),
+            allow_tools=os.getenv("ROBOT_ALLOW_TOOLS", "1").lower() not in ("0", "false", "no"),
+        )
+        self.toolbox = RobotToolbox()
         self.stored_responses = []
         self.startup_vision_label = "-"
         self.latest_world_summary = "-"
@@ -32,6 +38,34 @@ class RobotBrain:
         # It can still be disabled explicitly via env when debugging other paths.
         self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
         self.world_enabled = os.getenv("ROBOT_ENABLE_WORLD_MODEL", "1").lower() not in ("0", "false", "no")
+
+    def set_governor_state(self, decision):
+        self.face.set_state(governor=f"{'ALLOW' if decision.allowed else 'BLOCK'}: {decision.reason}")
+
+    async def dispatch_body_intent(self, world_summary: str):
+        intent = body_intent_for_world(world_summary)
+        decision = self.governor.approve(intent)
+        self.set_governor_state(decision)
+        if not decision.allowed:
+            return
+        action = intent.payload.get("action", "idle")
+        self.face.set_state(body=str(action))
+        await self.channel.send_command("body_control", action=action)
+
+    async def maybe_use_tool(self, transcript: str):
+        intent = classify_tool_intent(transcript)
+        if intent is None:
+            self.face.set_state(tools="Idle")
+            return None
+        decision = self.governor.approve(intent)
+        self.set_governor_state(decision)
+        if not decision.allowed:
+            self.face.set_state(tools=f"Blocked: {intent.payload.get('tool', 'tool')}")
+            return f"I am not allowed to use the {intent.payload.get('tool', 'requested')} tool right now."
+        self.face.set_state(tools=f"Running {intent.payload.get('tool', 'tool')}")
+        result = self.toolbox.execute(intent)
+        self.face.set_state(tools=f"Completed {intent.payload.get('tool', 'tool')}")
+        return result
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
@@ -125,6 +159,9 @@ class RobotBrain:
             hearing="Stand by",
             vision="Stand by",
             reasoning="Verifying agent",
+            body="Idle",
+            tools="Idle",
+            governor="Ready",
             speaking="Stand by",
             event="Starting brain",
         )
@@ -180,6 +217,9 @@ class RobotBrain:
             hearing="Listening on microphone",
             vision="Scanning scene",
             world="Scanning scene dynamics",
+            body="Idle",
+            tools="Idle",
+            governor="Ready",
             reasoning="Preparing greeting",
             speaking="Preparing greeting" if self.body.tts_available else "Unavailable",
             memory="0 memories",
@@ -228,6 +268,8 @@ class RobotBrain:
             hearing="Listening on microphone",
             vision="Scanning scene",
             world=self.face.clip_text(self.latest_world_summary or "Scanning scene dynamics", 64),
+            body="Idle",
+            tools="Idle",
             reasoning="Waiting for speech",
             speaking="Idle" if self.body.tts_available else "Unavailable",
             event="Live interaction loop started",
@@ -318,6 +360,7 @@ class RobotBrain:
                         latest_world_summary = self.compute_world_summary(latest_camera_frame, latest_vision_label)
                         latest_scene_summary = latest_world_summary or latest_vision_label or "-"
                         self.latest_camera_frame = latest_camera_frame
+                        await self.dispatch_body_intent(latest_world_summary)
                         self.face.set_state(
                             vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                             world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
@@ -356,10 +399,16 @@ class RobotBrain:
                     self.awaiting_tts_done = False
                     self.body.speech_enabled = True
                     self.face.set_state(
+                        body=self.face.ui_state.get("body", "Idle"),
+                        tools="Idle",
                         speaking="Idle" if self.body.tts_available else "Unavailable",
                         reasoning="Waiting for speech",
                         event="Ready for next interaction",
                     )
+                    continue
+
+                if event.kind == "body_control_done":
+                    self.face.set_state(event=f"Body ready: {event.payload.get('action', 'idle')}")
                     continue
 
                 if event.kind != "microphone":
@@ -419,39 +468,47 @@ class RobotBrain:
                     latest_world_summary = self.compute_world_summary(latest_camera_frame, latest_vision_label)
                     latest_scene_summary = latest_world_summary or latest_vision_label or "-"
                     self.latest_camera_frame = latest_camera_frame
+                    await self.dispatch_body_intent(latest_world_summary)
                     self.face.set_state(
                         vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                         world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
                     )
 
-                context_parts = []
-                if vision_label:
-                    context_parts.append(f"vision={vision_label}")
-                if latest_world_summary and latest_world_summary != "-":
-                    context_parts.append(f"world={latest_world_summary}")
-                context = f" ({'; '.join(context_parts)})" if context_parts else ""
-                self.face.set_latest(
-                    text_input,
-                    latest_vision_label or "-",
-                    latest_world_summary or "-",
-                    "Thinking...",
-                )
-                self.face.set_state(
-                    reasoning="Composing response",
-                    event="Running language model",
-                    speaking="Thinking",
-                )
-                if self.language_warm_task is not None and not self.language_warm_task.done():
-                    self.face.set_state(event="Waiting for language model warmup")
-                    await self.language_warm_task
-                    self.language_warm_done = True
-                language_started = time.perf_counter()
-                response_text = str(await asyncio.wait_for(
-                    self.run_blocking(self.agent.run, f"{text_input}{context}", model_kind="language"),
-                    timeout=float(os.getenv("ROBOT_LANGUAGE_TIMEOUT_S", "45")),
-                )).strip()
-                language_ms = (time.perf_counter() - language_started) * 1000
-                self.face.set_state(reasoning=self.face.clip_text(response_text or "No response generated", 64))
+                tool_response = await self.maybe_use_tool(text_input)
+                if tool_response is not None:
+                    response_text = str(tool_response).strip()
+                    self.face.set_state(reasoning="Tool response ready")
+                    language_ms = 0
+                else:
+                    context_parts = []
+                    if vision_label:
+                        context_parts.append(f"vision={vision_label}")
+                    if latest_world_summary and latest_world_summary != "-":
+                        context_parts.append(f"world={latest_world_summary}")
+                    context = f" ({'; '.join(context_parts)})" if context_parts else ""
+                    self.face.set_latest(
+                        text_input,
+                        latest_vision_label or "-",
+                        latest_world_summary or "-",
+                        "Thinking...",
+                    )
+                    self.face.set_state(
+                        tools="Idle",
+                        reasoning="Composing response",
+                        event="Running language model",
+                        speaking="Thinking",
+                    )
+                    if self.language_warm_task is not None and not self.language_warm_task.done():
+                        self.face.set_state(event="Waiting for language model warmup")
+                        await self.language_warm_task
+                        self.language_warm_done = True
+                    language_started = time.perf_counter()
+                    response_text = str(await asyncio.wait_for(
+                        self.run_blocking(self.agent.run, f"{text_input}{context}", model_kind="language"),
+                        timeout=float(os.getenv("ROBOT_LANGUAGE_TIMEOUT_S", "45")),
+                    )).strip()
+                    language_ms = (time.perf_counter() - language_started) * 1000
+                    self.face.set_state(reasoning=self.face.clip_text(response_text or "No response generated", 64))
 
                 self.face.set_state(event="Updating memory")
                 # Disabled for the live sample path for now: FAISS-based semantic memory

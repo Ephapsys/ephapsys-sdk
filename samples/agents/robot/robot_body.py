@@ -31,6 +31,7 @@ class RobotBody:
         self._last_hearing_text = None
         self._last_hearing_event = None
         self._last_hearing_update_at = 0.0
+        self.current_body_action = "Idle"
 
     @staticmethod
     def format_level(level: float) -> str:
@@ -363,6 +364,12 @@ class RobotBody:
                 got_command = True
                 if command.kind == "speak":
                     await self.play_tts_async(agent, command.payload.get("text", ""))
+                elif command.kind == "body_control":
+                    action = command.payload.get("action", "idle")
+                    self.current_body_action = str(action)
+                    self.face.set_state(body=self.current_body_action, event=f"Body control: {self.current_body_action}")
+                    await asyncio.sleep(0.15)
+                    await self.channel.emit_event("body_control_done", action=self.current_body_action)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
