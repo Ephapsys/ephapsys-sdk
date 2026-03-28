@@ -270,7 +270,7 @@ case "${SDK_PACKAGE_SOURCE,,}" in
     ;;
   testpypi)
     PIP_INSTALL_CMD="pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple ephapsys==${SDK_VERSION}"
-    TARGET_REGISTRY="TestPyPI"
+    TARGET_REGISTRY="alternate index"
     ;;
   custom)
     if [ -z "${SDK_INDEX_URL:-}" ]; then
@@ -285,7 +285,7 @@ case "${SDK_PACKAGE_SOURCE,,}" in
     TARGET_REGISTRY="custom index"
     ;;
   *)
-    printf "${MAGENTA}❌ SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom${RESET}\n"
+    printf "${MAGENTA}❌ Unsupported SDK_PACKAGE_SOURCE value${RESET}\n"
     exit 1
     ;;
 esac
