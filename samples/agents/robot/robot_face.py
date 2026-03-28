@@ -162,7 +162,7 @@ class RobotFace(RobotFaceBase):
         state.append(status_label, style=status_style)
         state.append("\n")
         state.append("Event     ", style="bold white")
-        state.append(f"{self.clip_text(self.ui_state['event'], 48)}\n")
+        state.append(f"{self.clip_text(self.ui_state['event'], 72)}\n")
         state.append("Memory    ", style="bold white")
         state.append(f"{self.clip_text(self.ui_state['memory'], 48)}\n")
         state.append("Latency   ", style="bold bright_white")
@@ -186,6 +186,9 @@ class RobotFace(RobotFaceBase):
             )
 
         footer = Text()
+        footer.append("Event: ", style="bold white")
+        footer.append(self.clip_text(self.ui_state["event"], 120), style="dim")
+        footer.append("\n")
         footer.append("Ctrl+C", style="bold")
         footer.append(" to exit", style="dim")
 
