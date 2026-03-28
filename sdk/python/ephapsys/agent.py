@@ -3242,7 +3242,12 @@ class TrustedAgent:
 
         try:
             from PIL import Image
-            from transformers import AutoImageProcessor, AutoModelForImageClassification
+            from transformers import (
+                AutoConfig,
+                AutoImageProcessor,
+                AutoModelForImageClassification,
+                AutoModelForObjectDetection,
+            )
             import torch
         except ImportError:
             raise RuntimeError("Transformers/Pillow not installed. `pip install transformers pillow`")
@@ -3251,15 +3256,48 @@ class TrustedAgent:
             image_input = Image.open(image_input).convert("RGB")
 
         processor = AutoImageProcessor.from_pretrained(model_path)
-        model = AutoModelForImageClassification.from_pretrained(model_path)
-        self._apply_ecm_if_available(model, runtime)
-        model = model.to(self._device())
         inputs = processor(images=image_input, return_tensors="pt").to(self._device())
-        with torch.no_grad():
-            logits = model(**inputs).logits
-            probs = logits.softmax(-1)
-            label_id = int(probs.argmax(-1).item())
-        result = model.config.id2label.get(label_id, str(label_id))
+        config = AutoConfig.from_pretrained(model_path)
+
+        if getattr(config, "model_type", "") == "yolos":
+            model = AutoModelForObjectDetection.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
+            with torch.no_grad():
+                outputs = model(**inputs)
+            target_sizes = torch.tensor([image_input.size[::-1]], device=self._device())
+            detections = processor.post_process_object_detection(
+                outputs,
+                threshold=0.5,
+                target_sizes=target_sizes,
+            )[0]
+            labels = []
+            for label_id, score in zip(detections.get("labels", []), detections.get("scores", [])):
+                label_name = model.config.id2label.get(int(label_id), str(int(label_id)))
+                labels.append((float(score), label_name))
+            labels.sort(reverse=True)
+            if labels:
+                top = []
+                seen = set()
+                for _, label_name in labels:
+                    if label_name in seen:
+                        continue
+                    seen.add(label_name)
+                    top.append(label_name)
+                    if len(top) >= 3:
+                        break
+                result = ", ".join(top)
+            else:
+                result = "no objects detected"
+        else:
+            model = AutoModelForImageClassification.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
+            with torch.no_grad():
+                logits = model(**inputs).logits
+                probs = logits.softmax(-1)
+                label_id = int(probs.argmax(-1).item())
+            result = model.config.id2label.get(label_id, str(label_id))
 
         # --- Enforce output policies for vision ---
         enforced_output, out_policies = self.enforce_policies_model_kind(result, "vision", "output")
