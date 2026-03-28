@@ -616,8 +616,7 @@ for mid in "${MODEL_IDS[@]}"; do
   # Attach aux refs to TTS config
   if [[ "$mkind" =~ ^(tts|TTS)$ && -n "$VOCODER_ID" ]]; then
     entry=$(echo "$entry" | jq --arg vid "$VOCODER_ID" '
-      .config.vocoder_model_id = $vid |
-      .config.speaker_embeddings_uri = (.config.speaker_embeddings_uri // "https://huggingface.co/Matthijs/cmu-arctic-xvectors/resolve/main/speaker_embeddings.pt")
+      .config.vocoder_model_id = $vid
     ')
   fi
   MODEL_ENTRIES+=("$entry")
