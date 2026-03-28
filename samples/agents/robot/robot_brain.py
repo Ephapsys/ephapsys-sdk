@@ -263,12 +263,29 @@ class RobotBrain:
                 language_ms = 0
                 embedding_ms = 0
 
+                self.face.set_latest(heard_summary, latest_vision_label or "-", self.face.latest.get("reply", "-"))
                 self.face.set_state(hearing="Transcribing speech", event="Processing microphone input")
+                if live is not None:
+                    panel = self.face.render_status(
+                        heard_summary,
+                        latest_vision_label or "-",
+                        self.face.latest.get("reply", "-"),
+                    )
+                    key = self.face.render_key(
+                        heard_summary,
+                        latest_vision_label or "-",
+                        self.face.latest.get("reply", "-"),
+                    )
+                    if key != last_render_key:
+                        live.update(panel)
+                        last_render_key = key
                 stt_started = time.perf_counter()
                 stt_audio = self.body.audio_to_wav_bytes(mic_audio)
                 text_input = await self.run_blocking(self.agent.run, stt_audio, model_kind="stt")
                 stt_ms = (time.perf_counter() - stt_started) * 1000
-                self.face.set_state(hearing=self.face.clip_text(text_input or heard_summary or "No speech detected", 64))
+                transcript = self.face.clip_text(text_input or heard_summary or "No speech detected", 64)
+                self.face.set_state(hearing=transcript)
+                self.face.set_latest(transcript, latest_vision_label or "-", self.face.latest.get("reply", "-"))
 
                 vision_label = latest_vision_label if latest_vision_label != "-" else None
                 if latest_camera_frame is not None:
