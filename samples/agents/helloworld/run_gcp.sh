@@ -3,15 +3,14 @@
 # Run HelloWorld agent sample on a persistent GCP VM.
 #
 # Usage:
-#   ./run_gcp.sh --staging          # install SDK from TestPyPI (default)
-#   ./run_gcp.sh --production       # install SDK from PyPI
-#   ./run_gcp.sh --zone us-central1-a --machine-type e2-standard-4
-#   ./run_gcp.sh --attach        # auto-attach to tmux after provisioning
+#   ./run_gcp.sh
+#   ./run_gcp.sh --gpu --gpu-type t4
+#   ./run_gcp.sh --no-interactive
 #
 # Requirements:
-#   - gcloud CLI authenticated with access to ephapsys-development
-#   - helloworld/.env populated with AOC creds (copied to VM)
-#   - SDK/python/pyproject.toml contains the version to install
+#   - gcloud CLI authenticated for your own GCP project
+#   - helloworld/.env populated with agent credentials (copied to VM)
+#   - helloworld/.env.gcp populated with GCP deployment settings
 # ============================================================
 
 set -euo pipefail
@@ -45,26 +44,33 @@ trap cleanup_temp_files EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../" && pwd)"
 PYPROJECT="$REPO_ROOT/Product/SDK/python/pyproject.toml"
-PROJECT_ID="${PROJECT_ID:-ephapsys-development}"
-ZONE="${ZONE:-us-central1-a}"
-MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-4}"
-DISK_SIZE="${DISK_SIZE:-50GB}"
-IMAGE_FAMILY="${IMAGE_FAMILY:-ubuntu-2204-lts}"
-IMAGE_PROJECT="${IMAGE_PROJECT:-ubuntu-os-cloud}"
-MODE="staging"
-INSTANCE_PREFIX="${INSTANCE_PREFIX:-hello-agent}"
+GCP_ENV_FILE="${HELLOWORLD_GCP_ENV_FILE:-$SCRIPT_DIR/.env.gcp}"
 INTERACTIVE=true
 CPU_ONLY=true
-GPU_TYPE="${GPU_TYPE:-t4}"
-GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-n1-standard-8}"
-GPU_COUNT="${GPU_COUNT:-1}"
-GPU_IMAGE_FAMILY="${GPU_IMAGE_FAMILY:-pytorch-2-7-cu128-ubuntu-2204-nvidia-570}"
 META_FILE="$SCRIPT_DIR/.last_gcp_instance"
+
+if [ -f "$GCP_ENV_FILE" ]; then
+  info "Using GCP settings from $GCP_ENV_FILE"
+  set -a && source "$GCP_ENV_FILE" && set +a
+fi
+
+PROJECT_ID="${PROJECT_ID:-}"
+ZONE="${ZONE:-}"
+MACHINE_TYPE="${MACHINE_TYPE:-}"
+DISK_SIZE="${DISK_SIZE:-}"
+IMAGE_FAMILY="${IMAGE_FAMILY:-}"
+IMAGE_PROJECT="${IMAGE_PROJECT:-}"
+INSTANCE_PREFIX="${INSTANCE_PREFIX:-}"
+GPU_TYPE="${GPU_TYPE:-}"
+GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-}"
+GPU_COUNT="${GPU_COUNT:-1}"
+GPU_IMAGE_FAMILY="${GPU_IMAGE_FAMILY:-}"
+SDK_PACKAGE_SOURCE="${HELLOWORLD_SDK_PACKAGE_SOURCE:-pypi}"
+SDK_INDEX_URL="${HELLOWORLD_SDK_INDEX_URL:-}"
+SDK_EXTRA_INDEX_URL="${HELLOWORLD_SDK_EXTRA_INDEX_URL:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --staging) MODE="staging"; shift ;;
-    --production) MODE="production"; shift ;;
     --zone) ZONE="$2"; shift 2 ;;
     --machine-type) MACHINE_TYPE="$2"; shift 2 ;;
     --disk-size) DISK_SIZE="$2"; shift 2 ;;
@@ -112,23 +118,20 @@ if ! command -v gcloud >/dev/null 2>&1; then
   exit 1
 fi
 
-GLOBAL_ENV_DIR="$REPO_ROOT/Product"
-ENV_FILE_LOCAL="$SCRIPT_DIR/.env.stag"
-GLOBAL_ENV_FILE="$GLOBAL_ENV_DIR/.env.stag"
-if [ "$MODE" = "production" ]; then
-  ENV_FILE_LOCAL="$SCRIPT_DIR/.env.prod"
-  GLOBAL_ENV_FILE="$GLOBAL_ENV_DIR/.env.prod"
-fi
+REQUIRED_GCP_VARS=(PROJECT_ID ZONE MACHINE_TYPE DISK_SIZE IMAGE_FAMILY IMAGE_PROJECT INSTANCE_PREFIX)
+for var in "${REQUIRED_GCP_VARS[@]}"; do
+  if [ -z "${!var:-}" ]; then
+    printf "${MAGENTA}❌ %s must be set in %s${RESET}\n" "$var" "$GCP_ENV_FILE"
+    exit 1
+  fi
+done
 
-if [ -f "$GLOBAL_ENV_FILE" ]; then
-  info "Using global env file $GLOBAL_ENV_FILE"
-  ACTIVE_ENV_FILE="$GLOBAL_ENV_FILE"
-else
-  ACTIVE_ENV_FILE="$ENV_FILE_LOCAL"
-fi
+GLOBAL_ENV_DIR="$REPO_ROOT/Product"
+ENV_FILE_LOCAL="$SCRIPT_DIR/.env"
+ACTIVE_ENV_FILE="$ENV_FILE_LOCAL"
 
 if [ ! -f "$ACTIVE_ENV_FILE" ]; then
-  printf "${MAGENTA}❌ Missing env file. Expected one of %s or %s${RESET}\n" "$GLOBAL_ENV_FILE" "$ENV_FILE_LOCAL"
+  printf "${MAGENTA}❌ Missing runtime env file. Expected %s${RESET}\n" "$ENV_FILE_LOCAL"
   exit 1
 fi
 
@@ -258,13 +261,32 @@ if [[ "$SDK_VERSION" == "0.0.0" || -z "$SDK_VERSION" ]]; then
   exit 1
 fi
 
-if [ "$MODE" = "staging" ]; then
-  PIP_INSTALL_CMD="pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple ephapsys==${SDK_VERSION}"
-  TARGET_REGISTRY="TestPyPI"
-else
-  PIP_INSTALL_CMD="pip install ephapsys==${SDK_VERSION}"
-  TARGET_REGISTRY="PyPI"
-fi
+case "${SDK_PACKAGE_SOURCE,,}" in
+  pypi)
+    PIP_INSTALL_CMD="pip install ephapsys==${SDK_VERSION}"
+    TARGET_REGISTRY="PyPI"
+    ;;
+  testpypi)
+    PIP_INSTALL_CMD="pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple ephapsys==${SDK_VERSION}"
+    TARGET_REGISTRY="TestPyPI"
+    ;;
+  custom)
+    if [ -z "${SDK_INDEX_URL:-}" ]; then
+      printf "${MAGENTA}❌ HELLOWORLD_SDK_INDEX_URL must be set when HELLOWORLD_SDK_PACKAGE_SOURCE=custom${RESET}\n"
+      exit 1
+    fi
+    PIP_INSTALL_CMD="pip install --index-url ${SDK_INDEX_URL}"
+    if [ -n "${SDK_EXTRA_INDEX_URL:-}" ]; then
+      PIP_INSTALL_CMD="${PIP_INSTALL_CMD} --extra-index-url ${SDK_EXTRA_INDEX_URL}"
+    fi
+    PIP_INSTALL_CMD="${PIP_INSTALL_CMD} ephapsys==${SDK_VERSION}"
+    TARGET_REGISTRY="custom index"
+    ;;
+  *)
+    printf "${MAGENTA}❌ HELLOWORLD_SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom${RESET}\n"
+    exit 1
+    ;;
+esac
 
 create_instance() {
   local machine="$MACHINE_TYPE"
