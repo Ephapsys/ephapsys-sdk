@@ -11,6 +11,7 @@ from robot_channel import RobotChannel
 from robot_brain import RobotBrain
 from robot_contracts import ROBOT_PUBLIC_SCHEMAS, public_schema_bundle
 from robot_face import RobotStateFace
+from robot_remote_body import RemoteAudioSegmenter
 
 app = FastAPI(title="Robot Brain")
 
@@ -19,6 +20,7 @@ state_face = RobotStateFace()
 channel = RobotChannel()
 body = RobotBody(state_face, shutdown_event, channel)
 brain = RobotBrain(state_face, body, channel, shutdown_event)
+remote_audio = RemoteAudioSegmenter(body, channel)
 brain_task = None
 brain_ready = asyncio.Event()
 body_mode = os.getenv("ROBOT_BODY_MODE", "local").strip().lower()
@@ -118,15 +120,10 @@ async def ws_body_audio(ws: WebSocket):
             data = message.get("bytes")
             if not data:
                 continue
-            wav_bytes = body.pcm16_bytes_to_wav_bytes(data)
-            await channel.emit_event(
-                "microphone",
-                audio=wav_bytes,
-                summary=body.summarize_pcm16_bytes(data),
-                source="remote_ws",
-            )
+            await remote_audio.ingest(data)
             state_face.set_state(hearing="Remote microphone active", event="Remote body audio received")
     except WebSocketDisconnect:
+        await remote_audio.flush()
         return
 
 
