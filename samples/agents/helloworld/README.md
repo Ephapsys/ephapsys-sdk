@@ -156,14 +156,17 @@ That opt-in path creates `.venv` if needed and installs the SDK from the local c
 
 ### GCP VM
 
-1. Populate local `.env` with the appropriate agent credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, `AGENT_TEMPLATE_ID`) and local `.env.gcp` with your GCP deployment settings.
-2. Run `./run.sh --gcp`. The script:
+1. Copy `.env.gcp.example` to `.env.gcp`.
+2. Populate local `.env` with the appropriate agent credentials (`AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, `AGENT_TEMPLATE_ID`) and local `.env.gcp` with your GCP deployment settings.
+3. Run `./check_gcp.sh`.
+4. Run `./run.sh --gcp`. The script:
    - Reads the chosen `.env.*` before naming the VM so the hostname reflects the anchor (e.g., `hello-agent-<ts>-tpm`).
    - Creates a Shielded VM with vTPM enabled (required for TPM anchors).
    - Installs the SDK + deps, pins NumPy `<2`, sets up `tpm2-tools`, and starts the bot via `nohup … >> helloworld.log`.
    - *Interactive mode (default)*: after provisioning completes, the script automatically SSHs into the VM and runs `python helloworld_agent.py` so you can chat immediately.
    - *Background mode*: pass `--no-interactive` if you want to deploy without opening the chatbot. Logs stream to `~/helloworld/helloworld.log` either way; use `./reattach_gcp.sh` to tail them or run the printed `gcloud … tail` command manually.
-3. By default we install the CPU-only PyTorch wheel to avoid downloading the 1.8 GB CUDA stack. If you need GPU builds, pass `--gpu` (expect slower provisioning).
+5. By default we install the CPU-only PyTorch wheel to avoid downloading the 1.8 GB CUDA stack. If you need GPU builds, pass `--gpu` (expect slower provisioning).
+6. Detailed GCP setup: [GCP.md](/Users/aidevmac/Projects/Ephapsys/Product/ephapsys-sdk/samples/agents/helloworld/GCP.md)
 
 ### HSM / Cloud KMS mode
 
@@ -193,6 +196,8 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 - `run.sh` → Public entrypoint. Use `--local` for local execution or `--gcp` for VM deployment.
 - `run_local.sh` → Local helper invoked by `run.sh --local`.
 - `run_gcp.sh` → GCP helper invoked by `run.sh --gcp`, with `--interactive/--no-interactive` and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
+- `check_gcp.sh` → GCP preflight helper for local deployment setup.
+- `GCP.md` → focused GCP setup notes for this sample.
 - `reattach_gcp.sh` → Smart reconnection helper. If it detects `helloworld_agent.py` running, it loads `.env`, activates the venv, and drops you into the chatbot. Otherwise it tails `~/helloworld/helloworld.log`.
 - `detach_gcp.sh` → (Legacy) left around in case you revert to tmux; not needed in the default workflow.
 - `check_iam_role.sh` → Quick helper to verify whether the current (or supplied) gcloud account has `roles/compute.instanceAdmin.v1` on the project.
