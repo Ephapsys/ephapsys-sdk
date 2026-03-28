@@ -519,6 +519,13 @@ def print_banner(base_url: str = None):
 # ---------------- Entry ----------------
 def main():
     parser = build_parser()
+    if len(sys.argv) == 2 and sys.argv[1] in ("-v", "--version"):
+        try:
+            parser.parse_args()
+        except SystemExit as exc:
+            return exc.code if isinstance(exc.code, int) else 0
+        return 0
+
     prelim_args = None
     try:
         prelim_args, _ = parser.parse_known_args()
