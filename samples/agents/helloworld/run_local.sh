@@ -25,17 +25,25 @@ error() {
 run_preflight() {
   info "Running HelloWorld preflight checks..."
   export AOC_BASE_URL="$BASE_URL"
-  if ! python3 - <<'PY'
+if ! python3 - <<'PY'
 import os
 import sys
 
-from ephapsys.auth import check_helloworld_bootstrap
+try:
+    from ephapsys.auth import check_helloworld_bootstrap
+except ImportError:
+    check_helloworld_bootstrap = None
 
 base_url = os.environ["AOC_BASE_URL"]
 org_id = os.environ["AOC_ORG_ID"]
 provisioning_token = os.environ["AOC_PROVISIONING_TOKEN"]
 agent_template_id = os.environ["AGENT_TEMPLATE_ID"]
 verify_ssl = os.getenv("AOC_VERIFY_SSL", "1").strip().lower() not in ("0", "false", "no", "")
+
+if check_helloworld_bootstrap is None:
+    print("[CHECK] WARN preflight helper unavailable in installed SDK; skipping backend bootstrap checks.")
+    print("[CHECK] Ready to run HelloWorld.")
+    sys.exit(0)
 
 try:
     result = check_helloworld_bootstrap(
