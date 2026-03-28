@@ -26,9 +26,10 @@ error() {
 }
 
 ensure_runtime_env() {
-  local venv sdk_extras
+  local venv sdk_extras sdk_source
   venv="${ROBOT_VENV:-.venv}"
   sdk_extras="${ROBOT_SDK_EXTRAS:-audio,vision,embedding}"
+  sdk_source="${ROBOT_SDK_PACKAGE_SOURCE:-${SDK_PACKAGE_SOURCE:-pypi}}"
 
   if [ "${ROBOT_USE_LOCAL_SDK:-0}" = "1" ]; then
     if [ ! -d "$venv" ]; then
@@ -54,8 +55,18 @@ ensure_runtime_env() {
     exit 1
   fi
 
-  info "Ensuring latest published Ephapsys SDK in $venv"
-  "$SDK_SETUP_SH" --pypi --venv "$venv" --extras "$sdk_extras"
+  case "$sdk_source" in
+    pypi|testpypi)
+      ;;
+    *)
+      error "Unsupported ROBOT_SDK_PACKAGE_SOURCE: $sdk_source"
+      error "Use pypi, testpypi, or set ROBOT_USE_LOCAL_SDK=1 for repo-local development."
+      exit 1
+      ;;
+  esac
+
+  info "Ensuring latest published Ephapsys SDK from $sdk_source in $venv"
+  "$SDK_SETUP_SH" "--$sdk_source" --venv "$venv" --extras "$sdk_extras"
   # shellcheck disable=SC1090
   source "$venv/bin/activate"
 
