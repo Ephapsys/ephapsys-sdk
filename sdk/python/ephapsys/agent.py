@@ -3699,13 +3699,83 @@ class TrustedAgent:
 
     def _run_world(self, runtime: Dict[str, Any], payload: Any):
         """
-        Placeholder world-model adapter.
-        The SDK can prepare and cache world-model runtimes, but sample-specific
-        adapters should own temporal input formatting and downstream decoding.
+        Generic world-model adapter for scene embeddings.
+        Returns a pooled embedding vector for a single frame or short frame list.
         """
-        raise RuntimeError(
-            "World-model inference is not wired into the generic SDK yet; use a sample-specific adapter around the prepared runtime."
-        )
+        model_path = runtime.get("model_path")
+        if not model_path:
+            raise RuntimeError("World runtime missing model_path")
+        enforced_input, in_policies = self.enforce_policies_model_kind(payload, "world", "input")
+        if enforced_input is None:
+            logger.warning("⚠️ World input blocked by policies: %s", in_policies)
+            return "[BLOCKED BY POLICIES]"
+        payload = enforced_input
+
+        try:
+            import json
+            import numpy as np
+            import torch
+            from PIL import Image
+            from transformers import VJEPA2Model
+        except ImportError:
+            raise RuntimeError("Install deps: `pip install transformers torch pillow numpy`")
+
+        model = runtime.get("_world_model")
+        image_size = runtime.get("_world_image_size")
+        if model is None:
+            config_path = pathlib.Path(model_path) / "config.json"
+            image_size = 256
+            if config_path.exists():
+                try:
+                    image_size = int(json.loads(config_path.read_text()).get("image_size") or image_size)
+                except Exception:
+                    pass
+            with self._suppress_transformers_warnings():
+                model = VJEPA2Model.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
+            runtime["_world_model"] = model
+            runtime["_world_image_size"] = image_size
+        if not image_size:
+            image_size = 256
+
+        frames = payload.get("frames") if isinstance(payload, dict) else payload
+        if not isinstance(frames, (list, tuple)):
+            frames = [frames]
+
+        processed_frames = []
+        for frame in frames:
+            if isinstance(frame, dict) and frame.get("image") is not None:
+                frame = frame["image"]
+            if isinstance(frame, Image.Image):
+                img = frame.convert("RGB").resize((image_size, image_size))
+                arr = np.asarray(img, dtype="float32") / 255.0
+            else:
+                arr = np.asarray(frame, dtype="float32")
+                if arr.ndim != 3:
+                    raise ValueError("world input frames must be HxWxC images")
+                if arr.max() > 1.0:
+                    arr = arr / 255.0
+                img = Image.fromarray(np.clip(arr * 255.0, 0, 255).astype("uint8")).resize((image_size, image_size))
+                arr = np.asarray(img, dtype="float32") / 255.0
+            arr = (arr - 0.5) / 0.5
+            processed_frames.append(arr)
+
+        if len(processed_frames) == 1:
+            processed_frames = processed_frames * 2
+
+        video = np.stack(processed_frames[:2], axis=0)
+        tensor = torch.from_numpy(video).permute(0, 3, 1, 2).unsqueeze(0).to(self._device())
+        with torch.no_grad():
+            outputs = model(pixel_values_videos=tensor, skip_predictor=True)
+        hidden = outputs.last_hidden_state
+        embedding = hidden.mean(dim=tuple(range(1, hidden.ndim))).detach().cpu().numpy().astype("float32")
+
+        enforced_output, out_policies = self.enforce_policies_model_kind(embedding, "world", "output")
+        if enforced_output is None:
+            logger.warning("⚠️ World output blocked by policies: %s", out_policies)
+            return "[BLOCKED BY POLICIES]"
+        return enforced_output.tolist()
 
 
     # --- Audio (audio event classification) ---
