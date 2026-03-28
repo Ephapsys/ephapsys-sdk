@@ -152,7 +152,7 @@ class RobotFaceBase:
             ("TTS", "tts", "magenta"),
         ):
             value = latency.get(key)
-            text.append(f"{label:<8}", style=f"bold {style}" if style != "white" else "bold white")
+            text.append(f"{label:<9}", style=f"bold {style}" if style != "white" else "bold white")
             if value is None:
                 text.append("—\n", style="dim")
             else:
