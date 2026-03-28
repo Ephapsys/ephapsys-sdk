@@ -12,12 +12,13 @@ from PIL import Image
 from ephapsys.agent import TrustedAgent
 from robot_arch import (
     RobotGovernor,
-    RobotIntent,
     RobotToolbox,
     body_intent_for_world,
     classify_tool_intent,
     face_intent_for_state,
 )
+from robot_contracts import BodyAction, FaceAction, SpeakAction, SpeechFact, SystemFact, VisionFact
+from robot_executors import ActionExecutor, BodyController, FaceController, SpeechController, ToolExecutor
 from robot_state import RobotStateStore
 
 
@@ -33,10 +34,16 @@ class RobotBrain:
             allow_tools=os.getenv("ROBOT_ALLOW_TOOLS", "1").lower() not in ("0", "false", "no"),
         )
         self.toolbox = RobotToolbox()
+        self.tool_executor = ToolExecutor(self.toolbox, self.face, self.governor, self.set_governor_state)
+        self.action_executor = ActionExecutor(
+            BodyController(self.channel, self.face),
+            FaceController(self.face),
+            SpeechController(self.channel, self.face),
+        )
         self.state = RobotStateStore()
         self.language_warm_task = None
-        self.reasoning_queue = asyncio.Queue()
-        self.output_queue = asyncio.Queue()
+        self.reasoning_queue: asyncio.Queue = asyncio.Queue()
+        self.output_queue: asyncio.Queue = asyncio.Queue()
         # Live per-turn vision is enabled by default again for the robot demo.
         # It can still be disabled explicitly via env when debugging other paths.
         self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
@@ -53,7 +60,7 @@ class RobotBrain:
             return
         action = intent.payload.get("action", "idle")
         self.face.set_state(body=str(action))
-        await self.channel.send_command("body_control", action=action)
+        await self.action_executor.execute(BodyAction(action=action, source=intent.source))
 
     async def maybe_use_tool(self, transcript: str):
         intent = classify_tool_intent(transcript)
@@ -65,22 +72,20 @@ class RobotBrain:
         if not decision.allowed:
             self.face.set_state(tools=f"Blocked: {intent.payload.get('tool', 'tool')}")
             return f"I am not allowed to use the {intent.payload.get('tool', 'requested')} tool right now."
-        self.face.set_state(tools=f"Running {intent.payload.get('tool', 'tool')}")
-        result = self.toolbox.execute(intent)
-        self.face.set_state(tools=f"Completed {intent.payload.get('tool', 'tool')}")
-        return result
+        return await self.tool_executor.execute(intent)
 
-    async def emit_reasoning_event(self, kind: str, **payload):
-        await self.reasoning_queue.put({"kind": kind, "payload": payload})
+    async def emit_reasoning_event(self, fact):
+        await self.reasoning_queue.put(fact)
 
-    async def emit_output_event(self, kind: str, **payload):
-        if kind in {"body_control", "face_control"}:
-            self._coalesce_output_kind(kind)
-        await self.output_queue.put({"kind": kind, "payload": payload})
+    async def emit_output_event(self, action):
+        coalesce_key = getattr(action, "coalesce_key", None)
+        if coalesce_key:
+            self._coalesce_output_kind(coalesce_key)
+        await self.output_queue.put(action)
 
     def _coalesce_output_kind(self, kind: str):
         queue_items = list(self.output_queue._queue)
-        filtered = [item for item in queue_items if item.get("kind") != kind]
+        filtered = [item for item in queue_items if getattr(item, "coalesce_key", None) != kind]
         if len(filtered) == len(queue_items):
             return
         self.output_queue._queue.clear()
@@ -100,9 +105,11 @@ class RobotBrain:
         self.state.latest_expression = str(intent.payload.get("expression", "neutral"))
         self.state.latest_gaze = str(intent.payload.get("gaze", "center"))
         await self.emit_output_event(
-            "face_control",
-            expression=self.state.latest_expression,
-            gaze=self.state.latest_gaze,
+            FaceAction(
+                expression=self.state.latest_expression,
+                gaze=self.state.latest_gaze,
+                source=intent.source,
+            )
         )
 
     def log_stage(self, label: str, started_at: float):
@@ -363,34 +370,39 @@ class RobotBrain:
             if event is None:
                 continue
             try:
-                await self.emit_reasoning_event(event.kind, **event.payload)
+                if event.kind == "tts_done":
+                    await self.emit_reasoning_event(SystemFact(name="tts_done", payload=event.payload))
+                elif event.kind == "body_control_done":
+                    await self.emit_reasoning_event(SystemFact(name="body_control_done", payload=event.payload))
+                elif event.kind == "camera":
+                    await self.emit_reasoning_event(SystemFact(name="camera", payload=event.payload, source="camera"))
+                elif event.kind == "microphone":
+                    await self.emit_reasoning_event(SystemFact(name="microphone", payload=event.payload, source="microphone"))
+                else:
+                    await self.emit_reasoning_event(SystemFact(name=event.kind, payload=event.payload))
             finally:
                 self.channel.event_done()
 
     async def output_arbiter(self):
         while not self.shutdown_event.is_set():
-            item = await self.output_queue.get()
+            action = await self.output_queue.get()
             try:
-                kind = item.get("kind")
-                payload = item.get("payload", {})
-                if kind == "speak":
+                if isinstance(action, SpeakAction):
                     self.state.awaiting_tts_done = True
                     self.body.speech_enabled = False
-                    self.face.set_state(speaking="Queued for playback", event="Reply ready")
+                    defer = self.governor.should_defer(
+                        face_intent_for_state(event="Reply ready"),
+                        speaking_active=self.state.awaiting_tts_done,
+                    )
+                    if defer.allowed:
+                        self.face.set_state(event=defer.reason)
                     await self.emit_face_intent(
                         world_summary=self.state.latest_world_summary,
                         reasoning=self.face.ui_state.get("reasoning", ""),
                         speaking="Queued for playback",
                         event="Reply ready",
                     )
-                    await self.channel.send_command("speak", text=payload.get("text", ""))
-                elif kind == "body_control":
-                    await self.channel.send_command("body_control", action=payload.get("action", "idle"))
-                elif kind == "face_control":
-                    self.face.set_state(
-                        expression=payload.get("expression", self.state.latest_expression),
-                        gaze=payload.get("gaze", self.state.latest_gaze),
-                    )
+                await self.action_executor.execute(action)
             finally:
                 self.output_queue.task_done()
 
@@ -414,11 +426,12 @@ class RobotBrain:
             vision_label = vision_label or latest_vision_label
             latest_world_summary = self.compute_world_summary(frame, vision_label)
         await self.emit_reasoning_event(
-            "vision_fact",
-            frame=frame,
-            vision_label=vision_label or "-",
-            world_summary=latest_world_summary or "-",
-            vision_ms=vision_ms,
+            VisionFact(
+                frame=frame,
+                vision_label=vision_label or "-",
+                world_summary=latest_world_summary or "-",
+                vision_ms=vision_ms,
+            )
         )
 
     async def publish_microphone_fact(self, mic_audio, heard_summary):
@@ -434,10 +447,11 @@ class RobotBrain:
         stt_ms = (time.perf_counter() - stt_started) * 1000
         transcript = self.face.clip_text(text_input or heard_summary or "No speech detected", 64)
         await self.emit_reasoning_event(
-            "speech_fact",
-            transcript=transcript,
-            stt_ms=stt_ms,
-            heard_summary=heard_summary,
+            SpeechFact(
+                transcript=transcript,
+                stt_ms=stt_ms,
+                heard_summary=heard_summary,
+            )
         )
 
     async def process_task(self, live=None):
@@ -483,10 +497,8 @@ class RobotBrain:
                 continue
 
             try:
-                event_kind = item.get("kind")
-                event_payload = item.get("payload", {})
-                if event_kind == "camera":
-                    latest_camera_frame = event_payload.get("frame")
+                if isinstance(item, SystemFact) and item.name == "camera":
+                    latest_camera_frame = item.payload.get("frame")
                     if latest_camera_frame is not None:
                         await self.publish_camera_fact(
                             latest_camera_frame,
@@ -495,7 +507,7 @@ class RobotBrain:
                         )
                     continue
 
-                if event_kind == "tts_done":
+                if isinstance(item, SystemFact) and item.name == "tts_done":
                     self.state.awaiting_tts_done = False
                     self.body.speech_enabled = True
                     self.face.set_state(
@@ -509,14 +521,14 @@ class RobotBrain:
                     )
                     continue
 
-                if event_kind == "body_control_done":
-                    self.face.set_state(event=f"Body ready: {event_payload.get('action', 'idle')}")
+                if isinstance(item, SystemFact) and item.name == "body_control_done":
+                    self.face.set_state(event=f"Body ready: {item.payload.get('action', 'idle')}")
                     continue
 
-                if event_kind == "vision_fact":
-                    latest_camera_frame = event_payload.get("frame")
-                    latest_vision_label = event_payload.get("vision_label") or latest_vision_label
-                    latest_world_summary = event_payload.get("world_summary") or latest_world_summary
+                if isinstance(item, VisionFact):
+                    latest_camera_frame = item.frame
+                    latest_vision_label = item.vision_label or latest_vision_label
+                    latest_world_summary = item.world_summary or latest_world_summary
                     latest_scene_summary = latest_world_summary or latest_vision_label or "-"
                     self.state.latest_camera_frame = latest_camera_frame
                     self.state.latest_world_summary = latest_world_summary
@@ -527,7 +539,7 @@ class RobotBrain:
                     if decision.allowed:
                         action = intent.payload.get("action", "idle")
                         self.face.set_state(body=str(action))
-                        await self.emit_output_event("body_control", action=action)
+                        await self.emit_output_event(BodyAction(action=action, source=intent.source))
                     await self.emit_face_intent(
                         world_summary=latest_world_summary,
                         reasoning=self.face.ui_state.get("reasoning", "Waiting for speech"),
@@ -537,7 +549,7 @@ class RobotBrain:
                     self.face.set_state(
                         vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                         world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
-                        latency={"vision": event_payload.get("vision_ms") or None},
+                        latency={"vision": item.vision_ms or None},
                         event="Speaking reply" if self.state.awaiting_tts_done else "Waiting for speech",
                     )
                     self.face.set_latest(
@@ -562,22 +574,22 @@ class RobotBrain:
                             last_render_key = key
                     continue
 
-                if event_kind == "microphone":
-                    mic_audio = event_payload.get("audio")
-                    heard_summary = event_payload.get("summary") or "No speech"
+                if isinstance(item, SystemFact) and item.name == "microphone":
+                    mic_audio = item.payload.get("audio")
+                    heard_summary = item.payload.get("summary") or "No speech"
                     await self.publish_microphone_fact(mic_audio, heard_summary)
                     continue
 
-                if event_kind != "speech_fact":
+                if not isinstance(item, SpeechFact):
                     continue
 
                 turn_started = time.perf_counter()
-                stt_ms = float(event_payload.get("stt_ms") or 0)
+                stt_ms = float(item.stt_ms or 0)
                 vision_ms = 0
                 language_ms = 0
                 embedding_ms = 0
 
-                text_input = event_payload.get("transcript") or "No speech detected"
+                text_input = item.transcript or "No speech detected"
                 self.face.set_state(hearing=text_input)
                 await self.emit_face_intent(
                     world_summary=latest_world_summary,
@@ -626,7 +638,7 @@ class RobotBrain:
                     if decision.allowed:
                         action = intent.payload.get("action", "idle")
                         self.face.set_state(body=str(action))
-                        await self.emit_output_event("body_control", action=action)
+                        await self.emit_output_event(BodyAction(action=action, source=intent.source))
                     await self.emit_face_intent(
                         world_summary=latest_world_summary,
                         reasoning=self.face.ui_state.get("reasoning", "Waiting for speech"),
@@ -738,7 +750,7 @@ class RobotBrain:
                 )
 
                 if self.body.tts_available:
-                    await self.emit_output_event("speak", text=augmented_text)
+                    await self.emit_output_event(SpeakAction(text=augmented_text))
 
                 self.face.set_latest(
                     hearing=text_input,

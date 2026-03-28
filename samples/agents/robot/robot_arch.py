@@ -45,6 +45,17 @@ class RobotGovernor:
             return GovernorDecision(True, "Speech allowed")
         return GovernorDecision(True, "Allowed")
 
+    def should_defer(self, intent: RobotIntent, *, speaking_active: bool = False) -> GovernorDecision:
+        if not speaking_active:
+            return GovernorDecision(False, "No active speech")
+        if intent.kind in {"face_control", "body_control"}:
+            return GovernorDecision(False, "Background control may continue while speaking")
+        if intent.kind == "tool":
+            return GovernorDecision(True, "Tool execution deferred while speaking")
+        if intent.kind == "speak":
+            return GovernorDecision(True, "Speech output serialized")
+        return GovernorDecision(False, "No defer rule matched")
+
 
 class RobotToolbox:
     def execute(self, intent: RobotIntent) -> Optional[str]:
