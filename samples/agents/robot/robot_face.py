@@ -259,7 +259,6 @@ class RobotFace(RobotFaceBase):
 
     def render_key(self, hearing_text, vision_text, response_text):
         return (
-            int(time.time() * 4),
             hearing_text or "-",
             vision_text or "-",
             response_text or "-",

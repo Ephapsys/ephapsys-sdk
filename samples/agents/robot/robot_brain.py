@@ -196,11 +196,18 @@ class RobotBrain:
                 event = None
 
             if event is None:
-                self.face.set_state(vision="Scanning", reasoning="Waiting for input")
-                self.face.set_latest("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                self.face.set_state(vision="Scanning", reasoning="Waiting for speech")
                 if live is not None:
-                    panel = self.face.render_status("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
-                    key = self.face.render_key("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                    panel = self.face.render_status(
+                        self.face.latest.get("hearing", "-"),
+                        latest_vision_label or "-",
+                        self.face.latest.get("reply", "-"),
+                    )
+                    key = self.face.render_key(
+                        self.face.latest.get("hearing", "-"),
+                        latest_vision_label or "-",
+                        self.face.latest.get("reply", "-"),
+                    )
                     if key != last_render_key:
                         live.update(panel)
                         last_render_key = key
@@ -227,10 +234,18 @@ class RobotBrain:
                             latency={"vision": vision_ms},
                             event="Waiting for speech",
                         )
-                        self.face.set_latest("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                        self.face.set_latest(self.face.latest.get("hearing", "-"), latest_vision_label or "-", self.face.latest.get("reply", "-"))
                         if live is not None:
-                            panel = self.face.render_status("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
-                            key = self.face.render_key("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                            panel = self.face.render_status(
+                                self.face.latest.get("hearing", "-"),
+                                latest_vision_label or "-",
+                                self.face.latest.get("reply", "-"),
+                            )
+                            key = self.face.render_key(
+                                self.face.latest.get("hearing", "-"),
+                                latest_vision_label or "-",
+                                self.face.latest.get("reply", "-"),
+                            )
                             if key != last_render_key:
                                 live.update(panel)
                                 last_render_key = key
