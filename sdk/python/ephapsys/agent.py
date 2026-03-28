@@ -1927,6 +1927,7 @@ class TrustedAgent:
 
     def _download_http_with_retry(self, src: str, dst: pathlib.Path) -> str:
         import urllib.request
+        import urllib.error
 
         retries = max(1, int(os.getenv("AOC_DOWNLOAD_RETRIES", "3")))
         timeout_s = float(os.getenv("AOC_DOWNLOAD_TIMEOUT", "60"))
@@ -1999,6 +2000,8 @@ class TrustedAgent:
                         tmp.unlink()
                 except Exception:
                     pass
+                if isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 403, 404):
+                    break
                 if attempt >= retries:
                     break
                 backoff = min(5.0, 0.5 * (2 ** (attempt - 1)))
@@ -2449,7 +2452,7 @@ class TrustedAgent:
                         self._download(speaker_uri, dst)
                     tts_rt["speaker_embeddings_path"] = str(dst)
                 except Exception as exc:
-                    logger.warning("[SDK][TTS] failed to download speaker embeddings: %s", exc)
+                    logger.debug("[SDK][TTS] optional speaker embeddings unavailable: %s", exc)
             if "speaker" in runtimes and "speaker_embeddings_path" not in tts_rt:
                 speaker_dir = pathlib.Path(runtimes["speaker"]["model_path"])
                 # best-effort find embeddings file
