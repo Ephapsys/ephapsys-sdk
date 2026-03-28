@@ -26,6 +26,7 @@ class RobotFaceBase:
         self.ui_state = {
             "hearing": "Stand by",
             "vision": "Stand by",
+            "world": "Stand by",
             "reasoning": "Starting brain",
             "speaking": "Stand by",
             "memory": "0 memories",
@@ -39,7 +40,7 @@ class RobotFaceBase:
             },
             "event": "Starting brain",
         }
-        self.latest = {"hearing": "-", "vision": "-", "reply": "-"}
+        self.latest = {"hearing": "-", "vision": "-", "world": "-", "reply": "-"}
         self.activity_log = []
 
     def add_activity(self, label, value, limit=12):
@@ -63,7 +64,7 @@ class RobotFaceBase:
                 if key == "event" and str(value) != str(previous):
                     self.add_activity("Event", value)
 
-    def set_latest(self, hearing=None, vision=None, reply=None):
+    def set_latest(self, hearing=None, vision=None, world=None, reply=None):
         if hearing is not None:
             hearing = str(hearing)
             if hearing != self.latest["hearing"] and hearing != "-":
@@ -74,6 +75,11 @@ class RobotFaceBase:
             if vision != self.latest["vision"] and vision != "-":
                 self.add_activity("Vision", vision)
             self.latest["vision"] = vision
+        if world is not None:
+            world = str(world)
+            if world != self.latest["world"] and world != "-":
+                self.add_activity("World", world)
+            self.latest["world"] = world
         if reply is not None:
             reply = str(reply)
             if reply != self.latest["reply"] and reply != "-":
@@ -191,6 +197,8 @@ class RobotFace(RobotFaceBase):
         state.append(f"{self.inline_text(self.ui_state['hearing'], status_width)}\n")
         state.append("Vision    ", style="bold green")
         state.append(f"{self.inline_text(self.ui_state['vision'], status_width)}\n")
+        state.append("World     ", style="bold bright_green")
+        state.append(f"{self.inline_text(self.ui_state['world'], status_width)}\n")
         state.append("Reasoning ", style="bold yellow")
         state.append(f"{self.inline_text(self.ui_state['reasoning'], status_width)}\n")
         state.append("Speaking  ", style="bold magenta")
@@ -226,6 +234,8 @@ class RobotFace(RobotFaceBase):
         latest.append(f"{self.inline_text(hearing_text or '-', latest_width)}\n")
         latest.append("Vision ", style="bold green")
         latest.append(f"{self.inline_text(vision_text or '-', latest_width)}\n")
+        latest.append("World  ", style="bold bright_green")
+        latest.append(f"{self.inline_text(self.latest.get('world', '-') or '-', latest_width)}\n")
         latest.append("Reply  ", style="bold yellow")
         latest.append(f"{self.inline_text(response_text or '-', latest_width)}")
 

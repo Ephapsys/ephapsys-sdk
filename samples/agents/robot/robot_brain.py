@@ -178,6 +178,7 @@ class RobotBrain:
         self.face.set_state(
             hearing="Listening on microphone",
             vision="Scanning scene",
+            world="Scanning scene dynamics",
             reasoning="Preparing greeting",
             speaking="Preparing greeting" if self.body.tts_available else "Unavailable",
             memory="0 memories",
@@ -197,9 +198,12 @@ class RobotBrain:
         self.latest_scene_summary = self.latest_world_summary if self.latest_world_summary != "-" else (startup_vision or "-")
         greeting = self.build_startup_greeting(startup_vision)
         self.startup_vision_label = startup_vision or "-"
-        self.face.set_latest("-", self.latest_scene_summary, greeting)
+        self.face.set_latest("-", startup_vision or "-", self.latest_world_summary, greeting)
         if startup_vision:
-            self.face.set_state(vision=self.face.clip_text(self.latest_scene_summary, 64))
+            self.face.set_state(
+                vision=self.face.clip_text(startup_vision, 64),
+                world=self.face.clip_text(self.latest_world_summary, 64),
+            )
         if startup_vision:
             self.face.console_live.print(f"[cyan]👁️ Startup vision: {startup_vision}[/cyan]")
         if self.body.tts_available:
@@ -222,6 +226,7 @@ class RobotBrain:
         self.face.set_state(
             hearing="Listening on microphone",
             vision="Scanning scene",
+            world=self.face.clip_text(self.latest_world_summary or "Scanning scene dynamics", 64),
             reasoning="Waiting for speech",
             speaking="Idle" if self.body.tts_available else "Unavailable",
             event="Live interaction loop started",
@@ -278,12 +283,12 @@ class RobotBrain:
                 if live is not None:
                     panel = self.face.render_status(
                         self.face.latest.get("hearing", "-"),
-                        latest_vision_label or "-",
+                        self.face.latest.get("vision", "-"),
                         self.face.latest.get("reply", "-"),
                     )
                     key = self.face.render_key(
                         self.face.latest.get("hearing", "-"),
-                        latest_vision_label or "-",
+                        self.face.latest.get("vision", "-"),
                         self.face.latest.get("reply", "-"),
                     )
                     if key != last_render_key:
@@ -311,20 +316,26 @@ class RobotBrain:
                         latest_scene_summary = latest_world_summary or latest_vision_label or "-"
                         self.latest_camera_frame = latest_camera_frame
                         self.face.set_state(
-                            vision=self.face.clip_text(latest_scene_summary or "No scene update", 64),
+                            vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
+                            world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
                             latency={"vision": vision_ms},
                             event="Waiting for speech",
                         )
-                        self.face.set_latest(self.face.latest.get("hearing", "-"), latest_scene_summary or "-", self.face.latest.get("reply", "-"))
+                        self.face.set_latest(
+                            self.face.latest.get("hearing", "-"),
+                            latest_vision_label or "-",
+                            latest_world_summary or "-",
+                            self.face.latest.get("reply", "-"),
+                        )
                         if live is not None:
                             panel = self.face.render_status(
                                 self.face.latest.get("hearing", "-"),
-                                latest_scene_summary or "-",
+                                self.face.latest.get("vision", "-"),
                                 self.face.latest.get("reply", "-"),
                             )
                             key = self.face.render_key(
                                 self.face.latest.get("hearing", "-"),
-                                latest_scene_summary or "-",
+                                self.face.latest.get("vision", "-"),
                                 self.face.latest.get("reply", "-"),
                             )
                             if key != last_render_key:
@@ -332,7 +343,8 @@ class RobotBrain:
                                 last_render_key = key
                     elif latest_camera_frame is not None:
                         self.face.set_state(
-                            vision=self.face.clip_text(latest_scene_summary or latest_vision_label or "Camera ready", 64),
+                            vision=self.face.clip_text(latest_vision_label or "Camera ready", 64),
+                            world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
                             event="Waiting for speech",
                         )
                     continue
@@ -349,17 +361,22 @@ class RobotBrain:
                 language_ms = 0
                 embedding_ms = 0
 
-                self.face.set_latest(heard_summary, latest_scene_summary or "-", self.face.latest.get("reply", "-"))
+                self.face.set_latest(
+                    heard_summary,
+                    latest_vision_label or "-",
+                    latest_world_summary or "-",
+                    self.face.latest.get("reply", "-"),
+                )
                 self.face.set_state(hearing="Transcribing speech", event="Processing microphone input")
                 if live is not None:
                     panel = self.face.render_status(
                         heard_summary,
-                        latest_scene_summary or "-",
+                        latest_vision_label or "-",
                         self.face.latest.get("reply", "-"),
                     )
                     key = self.face.render_key(
                         heard_summary,
-                        latest_scene_summary or "-",
+                        latest_vision_label or "-",
                         self.face.latest.get("reply", "-"),
                     )
                     if key != last_render_key:
@@ -370,7 +387,12 @@ class RobotBrain:
                 stt_ms = (time.perf_counter() - stt_started) * 1000
                 transcript = self.face.clip_text(text_input or heard_summary or "No speech detected", 64)
                 self.face.set_state(hearing=transcript)
-                self.face.set_latest(transcript, latest_scene_summary or "-", self.face.latest.get("reply", "-"))
+                self.face.set_latest(
+                    transcript,
+                    latest_vision_label or "-",
+                    latest_world_summary or "-",
+                    self.face.latest.get("reply", "-"),
+                )
 
                 vision_label = latest_vision_label if latest_vision_label != "-" else None
                 if self.live_vision_enabled and latest_camera_frame is not None:
@@ -384,7 +406,10 @@ class RobotBrain:
                     latest_world_summary = self.compute_world_summary(latest_camera_frame, latest_vision_label)
                     latest_scene_summary = latest_world_summary or latest_vision_label or "-"
                     self.latest_camera_frame = latest_camera_frame
-                    self.face.set_state(vision=self.face.clip_text(latest_scene_summary or "No scene update", 64))
+                    self.face.set_state(
+                        vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
+                        world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
+                    )
 
                 context_parts = []
                 if vision_label:
@@ -392,7 +417,12 @@ class RobotBrain:
                 if latest_world_summary and latest_world_summary != "-":
                     context_parts.append(f"world={latest_world_summary}")
                 context = f" ({'; '.join(context_parts)})" if context_parts else ""
-                self.face.set_latest(text_input, latest_scene_summary or "-", "Thinking...")
+                self.face.set_latest(
+                    text_input,
+                    latest_vision_label or "-",
+                    latest_world_summary or "-",
+                    "Thinking...",
+                )
                 self.face.set_state(
                     reasoning="Composing response",
                     event="Running language model",
@@ -466,10 +496,15 @@ class RobotBrain:
                     self.face.set_state(speaking="Queued for playback", event="Reply ready")
                     await self.channel.send_command("speak", text=augmented_text)
 
-                self.face.set_latest(text_input, latest_scene_summary or "-", augmented_text)
+                self.face.set_latest(
+                    text_input,
+                    latest_vision_label or "-",
+                    latest_world_summary or "-",
+                    augmented_text,
+                )
                 if live is not None:
-                    panel = self.face.render_status(text_input, latest_scene_summary or "-", augmented_text)
-                    key = self.face.render_key(text_input, latest_scene_summary or "-", augmented_text)
+                    panel = self.face.render_status(text_input, latest_vision_label or "-", augmented_text)
+                    key = self.face.render_key(text_input, latest_vision_label or "-", augmented_text)
                     if key != last_render_key:
                         live.update(panel)
                         last_render_key = key
