@@ -21,9 +21,9 @@ class RobotBrain:
         self.startup_vision_label = "-"
         self.language_warm_task = None
         self.language_warm_done = False
-        # Live per-turn vision is disabled for now to keep the sample stable.
-        # Startup vision still runs for the initial greeting/scene impression.
-        self.live_vision_enabled = False
+        # Live per-turn vision is enabled by default again for the robot demo.
+        # It can still be disabled explicitly via env when debugging other paths.
+        self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
