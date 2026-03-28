@@ -8,6 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from robot_body import RobotBody
 from robot_channel import RobotChannel
 from robot_brain import RobotBrain
+from robot_contracts import ROBOT_PUBLIC_SCHEMAS, public_schema_bundle
 from robot_face import RobotStateFace
 
 app = FastAPI(title="Robot Brain")
@@ -69,6 +70,19 @@ async def shutdown_event_handler():
 async def health():
     _ensure_brain_task()
     return {"ok": True, "ready": brain_ready.is_set(), "state": state_face.snapshot()}
+
+
+@app.get("/schemas")
+async def schemas():
+    return public_schema_bundle()
+
+
+@app.get("/schemas/{schema_name}")
+async def schema_by_name(schema_name: str):
+    schema = ROBOT_PUBLIC_SCHEMAS.get(schema_name)
+    if schema is None:
+        return {"ok": False, "error": f"unknown schema '{schema_name}'", "available": sorted(ROBOT_PUBLIC_SCHEMAS)}
+    return {"ok": True, "schema_version": "robot-public-v1", "name": schema_name, "schema": schema}
 
 
 @app.websocket("/ws/state")
