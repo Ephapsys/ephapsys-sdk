@@ -220,7 +220,7 @@ class RobotBody:
                 self.set_hearing_state(self.summarize_audio(audio), "Speech captured", force=True)
                 await self.channel.emit_event(
                     "microphone",
-                    audio=audio,
+                    audio=self.audio_to_wav_bytes(audio),
                     summary=self.summarize_audio(audio),
                 )
             except Exception as exc:
