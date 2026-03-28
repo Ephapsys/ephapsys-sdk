@@ -81,9 +81,9 @@ if ! python3 -c "import ephapsys, transformers, faiss, cv2, sounddevice, webrtcv
 fi
 
 info "Starting Robot Agent..."
-echo "  BASE_URL: $BASE_URL"
-echo "  AGENT_ID: $AGENT_ID"
-echo "  ANCHOR:   $PERSONALIZE_ANCHOR"
+if [ -n "${AGENT_TEMPLATE_NAME:-}" ]; then
+  echo "  TEMPLATE: $AGENT_TEMPLATE_NAME"
+fi
 
 # Enable Python faulthandler output for native crashes; toggle verbose audio debug with AUDIO_DEBUG=1
 # Constrain torch/BLAS threads to reduce native crashes in SpeechT5 init
