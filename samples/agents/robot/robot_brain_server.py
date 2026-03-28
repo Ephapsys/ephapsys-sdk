@@ -19,6 +19,12 @@ brain_task = None
 brain_ready = asyncio.Event()
 
 
+def _ensure_brain_task():
+    global brain_task
+    if brain_task is None:
+        brain_task = asyncio.create_task(_run_brain())
+
+
 async def _run_brain():
     try:
         await brain.startup()
@@ -45,9 +51,7 @@ async def _run_brain():
 
 @app.on_event("startup")
 async def startup_event():
-    global brain_task
-    if brain_task is None:
-        brain_task = asyncio.create_task(_run_brain())
+    asyncio.get_running_loop().call_soon(_ensure_brain_task)
 
 
 @app.on_event("shutdown")
