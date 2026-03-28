@@ -338,6 +338,17 @@ save_env_var() {
   fi
 }
 
+resolve_agent_template() {
+  local label="$1"
+  curl -sS -H "Authorization: Bearer ${API_TOKEN}" "${BASE_URL}/agents?type=TEMPLATE" | jq -r \
+    --arg label "$label" '
+      map(select((.label // "") == $label))
+      | sort_by(.created_at // 0)
+      | last
+      | (.id // .public_id // .ID // ._id // empty)
+    '
+}
+
 # ---------------------------------------------------------------------
 # List available templates (parity with previous scripts)
 # ---------------------------------------------------------------------
@@ -469,6 +480,17 @@ if [[ -z "$LABEL" ]]; then
   else
     read -p "Enter Agent Template label/name: " LABEL
   fi
+fi
+echo "[STEP] Resolving existing agent template"
+EXISTING_AGENT_ID="$(resolve_agent_template "$LABEL")"
+if [[ -n "$EXISTING_AGENT_ID" && "$EXISTING_AGENT_ID" != "null" ]]; then
+  echo "[INFO] Reusing existing agent template: ${EXISTING_AGENT_ID} (${LABEL})"
+  save_env_var "AGENT_TEMPLATE_ID" "$EXISTING_AGENT_ID"
+  echo "[INFO] Updated .env with AGENT_TEMPLATE_ID=${EXISTING_AGENT_ID}"
+  if [[ $IDEMPOTENT -eq 1 ]]; then
+    echo "[NOTE] Idempotent mode: modulation was skipped; only certificates were issued."
+  fi
+  exit 0
 fi
 MODELS_JSON=$(printf '%s\n' "${MODEL_IDS[@]}" | jq -R '{id: .}' | jq -s .)
 build_model_entry() {
