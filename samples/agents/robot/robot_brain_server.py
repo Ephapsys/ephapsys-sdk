@@ -16,18 +16,23 @@ state_face = RobotStateFace()
 body = RobotBody(state_face, shutdown_event)
 brain = RobotBrain(state_face, body, shutdown_event)
 brain_task = None
+brain_ready = asyncio.Event()
 
 
 async def _run_brain():
-    await brain.startup()
-    await asyncio.gather(
-        body.mic_task(),
-        body.cam_task(),
-        brain.process_task(None),
-        brain.periodic_verify(),
-        body.tts_worker(brain.agent),
-        return_exceptions=True,
-    )
+    try:
+        await brain.startup()
+        brain_ready.set()
+        await asyncio.gather(
+            body.mic_task(),
+            body.cam_task(),
+            brain.process_task(None),
+            brain.periodic_verify(),
+            body.tts_worker(brain.agent),
+            return_exceptions=True,
+        )
+    finally:
+        brain_ready.clear()
 
 
 @app.on_event("startup")
@@ -47,7 +52,7 @@ async def shutdown_event_handler():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "state": state_face.snapshot()}
+    return {"ok": True, "ready": brain_ready.is_set(), "state": state_face.snapshot()}
 
 
 @app.websocket("/ws/state")

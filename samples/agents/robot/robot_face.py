@@ -53,6 +53,13 @@ class RobotFaceBase:
         return text[: limit - 1].rstrip() + "…"
 
     def format_status(self):
+        if not self.agent_status.get("verified", False) and self.ui_state.get("event") in {
+            "Booting robot runtime",
+            "Personalizing agent instance",
+            "Preparing runtime bundles",
+            "Agent verified",
+        }:
+            return "[cyan]STARTING[/cyan]"
         if self.agent_status.get("revoked", False):
             return "[red]REVOKED[/red]"
         if not self.agent_status.get("enabled", False):

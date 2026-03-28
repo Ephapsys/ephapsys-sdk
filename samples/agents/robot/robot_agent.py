@@ -46,7 +46,9 @@ def wait_for_health(url: str, timeout_s: float = 20.0):
         try:
             with urllib.request.urlopen(url, timeout=1.0) as response:
                 if response.status == 200:
-                    return
+                    payload = response.read().decode("utf-8")
+                    if '"ready": true' in payload:
+                        return
         except Exception as exc:
             last_error = exc
         time.sleep(0.25)
