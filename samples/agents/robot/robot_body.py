@@ -54,8 +54,8 @@ class RobotBody:
         silence_count = 0
         silence_limit = int(0.5 * 1000 / chunk_ms)
         heard_speech = False
-        min_level = float(os.getenv("ROBOT_MIN_SPEECH_LEVEL", "0.008"))
-        speech_start_frames = int(os.getenv("ROBOT_SPEECH_START_FRAMES", "3"))
+        min_level = float(os.getenv("ROBOT_MIN_SPEECH_LEVEL", "0.002"))
+        speech_start_frames = int(os.getenv("ROBOT_SPEECH_START_FRAMES", "2"))
         speech_run = 0
 
         pa = pyaudio.PyAudio()
@@ -105,8 +105,9 @@ class RobotBody:
                     if silence_count > silence_limit:
                         break
                 else:
+                    vad_hint = "speech" if raw_speech else "noise"
                     self.face.set_state(
-                        hearing=f"Listening on microphone @ level {level:.3f}",
+                        hearing=f"Listening on microphone @ level {level:.3f} ({vad_hint})",
                         event="Waiting for speech",
                     )
                     buffer.extend(chunk)
