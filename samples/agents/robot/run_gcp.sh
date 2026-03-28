@@ -34,17 +34,18 @@ INSTANCE_PREFIX="${INSTANCE_PREFIX:-robot-brain}"
 REMOTE_DIR="${REMOTE_DIR:-robot}"
 REMOTE_PORT="${REMOTE_PORT:-8765}"
 LOCAL_TUNNEL_PORT="${LOCAL_TUNNEL_PORT:-48765}"
-MODE="staging"
 CPU_ONLY=true
 GPU_TYPE="${GPU_TYPE:-nvidia-tesla-t4}"
 GPU_COUNT="${GPU_COUNT:-1}"
 GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-n1-standard-8}"
+SDK_PACKAGE_SOURCE="${ROBOT_SDK_PACKAGE_SOURCE:-pypi}"
+SDK_INDEX_URL="${ROBOT_SDK_INDEX_URL:-}"
+SDK_EXTRA_INDEX_URL="${ROBOT_SDK_EXTRA_INDEX_URL:-}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./run_gcp.sh --staging
-  ./run_gcp.sh --production
+  ./run_gcp.sh
   ./run_gcp.sh --zone us-central1-a --machine-type e2-standard-8
   ./run_gcp.sh --gpu --gpu-type nvidia-tesla-t4
 
@@ -52,13 +53,12 @@ Notes:
   - Deploys only the Robot brain to GCP.
   - Keeps microphone, camera, speaker, and terminal face local.
   - Opens an SSH tunnel to the remote brain and runs ./robot_remote_agent.py locally.
+  - Package source is configured via ROBOT_SDK_PACKAGE_SOURCE / ROBOT_SDK_INDEX_URL env vars.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --staging) MODE="staging"; shift ;;
-    --production) MODE="production"; shift ;;
     --zone) ZONE="$2"; shift 2 ;;
     --project) PROJECT_ID="$2"; shift 2 ;;
     --machine-type) MACHINE_TYPE="$2"; shift 2 ;;
@@ -122,19 +122,16 @@ fi
 
 GLOBAL_ENV_DIR="$REPO_ROOT/Product"
 ENV_FILE_LOCAL="$SCRIPT_DIR/.env"
-GLOBAL_ENV_FILE="$GLOBAL_ENV_DIR/.env.stag"
-if [[ "$MODE" == "production" ]]; then
-  GLOBAL_ENV_FILE="$GLOBAL_ENV_DIR/.env.prod"
-fi
+GLOBAL_ENV_FILE="${ROBOT_GCP_ENV_FILE:-}"
 
 ACTIVE_ENV_FILE="$ENV_FILE_LOCAL"
-if [[ -f "$GLOBAL_ENV_FILE" ]]; then
+if [[ -n "$GLOBAL_ENV_FILE" && -f "$GLOBAL_ENV_FILE" ]]; then
   info "Using global env file $GLOBAL_ENV_FILE"
   ACTIVE_ENV_FILE="$GLOBAL_ENV_FILE"
 fi
 
 if [[ ! -f "$ACTIVE_ENV_FILE" ]]; then
-  error "Missing env file. Expected $ENV_FILE_LOCAL or $GLOBAL_ENV_FILE"
+  error "Missing env file. Expected $ENV_FILE_LOCAL${GLOBAL_ENV_FILE:+ or $GLOBAL_ENV_FILE}"
   exit 1
 fi
 
@@ -221,11 +218,29 @@ gcloud compute ssh "$INSTANCE_NAME" \
   --zone="$ZONE" \
   --command="chmod +x ~/${REMOTE_DIR}/run_brain_server.sh"
 
-if [[ "$MODE" == "staging" ]]; then
-  REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/robot-brain\nsource ~/.venvs/robot-brain/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install --extra-index-url https://pypi.org/simple --index-url https://test.pypi.org/simple "ephapsys[audio,vision,embedding]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r ~/'"$REMOTE_DIR"'/requirements_brain.txt >/dev/null'
-else
-  REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/robot-brain\nsource ~/.venvs/robot-brain/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install "ephapsys[audio,vision,embedding]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r ~/'"$REMOTE_DIR"'/requirements_brain.txt >/dev/null'
-fi
+case "${SDK_PACKAGE_SOURCE,,}" in
+  pypi)
+    REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/robot-brain\nsource ~/.venvs/robot-brain/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install "ephapsys[audio,vision,embedding]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r ~/'"$REMOTE_DIR"'/requirements_brain.txt >/dev/null'
+    ;;
+  testpypi)
+    REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/robot-brain\nsource ~/.venvs/robot-brain/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install --extra-index-url https://pypi.org/simple --index-url https://test.pypi.org/simple "ephapsys[audio,vision,embedding]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r ~/'"$REMOTE_DIR"'/requirements_brain.txt >/dev/null'
+    ;;
+  custom)
+    if [[ -z "$SDK_INDEX_URL" ]]; then
+      error "ROBOT_SDK_INDEX_URL must be set when ROBOT_SDK_PACKAGE_SOURCE=custom"
+      exit 1
+    fi
+    CUSTOM_INDEX_FLAGS="--index-url $(printf '%q' "$SDK_INDEX_URL")"
+    if [[ -n "$SDK_EXTRA_INDEX_URL" ]]; then
+      CUSTOM_INDEX_FLAGS="$CUSTOM_INDEX_FLAGS --extra-index-url $(printf '%q' "$SDK_EXTRA_INDEX_URL")"
+    fi
+    REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/robot-brain\nsource ~/.venvs/robot-brain/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install '"$CUSTOM_INDEX_FLAGS"$' "ephapsys[audio,vision,embedding]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r ~/'"$REMOTE_DIR"'/requirements_brain.txt >/dev/null'
+    ;;
+  *)
+    error "ROBOT_SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom"
+    exit 1
+    ;;
+esac
 
 info "Installing remote Python dependencies"
 gcloud compute ssh "$INSTANCE_NAME" \

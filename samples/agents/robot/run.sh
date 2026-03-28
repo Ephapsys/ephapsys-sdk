@@ -6,7 +6,7 @@ usage() {
 Usage:
   ./run.sh --local
   ./run.sh --local smoke
-  ./run.sh --gcp [--staging|--production] [other run_gcp.sh flags]
+  ./run.sh --gcp [other run_gcp.sh flags]
 
 Notes:
   --local launches the robot sample locally

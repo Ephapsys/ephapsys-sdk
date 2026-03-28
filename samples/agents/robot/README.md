@@ -161,15 +161,18 @@ Run the robot brain in GCP while keeping the local microphone, camera, speaker,
 and terminal face on your machine:
 
 ```bash
-./run.sh --gcp --staging
+./run.sh --gcp
 ```
 
 Notes for `--gcp`:
 - it provisions a Compute Engine VM
-- installs the current SDK version from TestPyPI by default
+- installs the current SDK version from PyPI by default
 - starts only `robot_brain_server.py` on the VM
 - opens an SSH tunnel back to `localhost`
 - runs `robot_remote_agent.py` locally so your body and terminal stay local
+- package-source overrides are env-based:
+  - `ROBOT_SDK_PACKAGE_SOURCE=testpypi`
+  - `ROBOT_SDK_PACKAGE_SOURCE=custom` with `ROBOT_SDK_INDEX_URL=...`
 
 ---
 
