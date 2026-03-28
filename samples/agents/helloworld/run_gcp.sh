@@ -44,7 +44,7 @@ trap cleanup_temp_files EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../" && pwd)"
 PYPROJECT="$REPO_ROOT/Product/SDK/python/pyproject.toml"
-GCP_ENV_FILE="${HELLOWORLD_GCP_ENV_FILE:-$SCRIPT_DIR/.env.gcp}"
+GCP_ENV_FILE="${GCP_ENV_FILE:-${HELLOWORLD_GCP_ENV_FILE:-$SCRIPT_DIR/.env.gcp}}"
 INTERACTIVE=true
 CPU_ONLY=true
 META_FILE="$SCRIPT_DIR/.last_gcp_instance"
@@ -65,9 +65,9 @@ GPU_TYPE="${GPU_TYPE:-}"
 GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-}"
 GPU_COUNT="${GPU_COUNT:-1}"
 GPU_IMAGE_FAMILY="${GPU_IMAGE_FAMILY:-}"
-SDK_PACKAGE_SOURCE="${HELLOWORLD_SDK_PACKAGE_SOURCE:-pypi}"
-SDK_INDEX_URL="${HELLOWORLD_SDK_INDEX_URL:-}"
-SDK_EXTRA_INDEX_URL="${HELLOWORLD_SDK_EXTRA_INDEX_URL:-}"
+SDK_PACKAGE_SOURCE="${SDK_PACKAGE_SOURCE:-${HELLOWORLD_SDK_PACKAGE_SOURCE:-pypi}}"
+SDK_INDEX_URL="${SDK_INDEX_URL:-${HELLOWORLD_SDK_INDEX_URL:-}}"
+SDK_EXTRA_INDEX_URL="${SDK_EXTRA_INDEX_URL:-${HELLOWORLD_SDK_EXTRA_INDEX_URL:-}}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -118,6 +118,8 @@ if ! command -v gcloud >/dev/null 2>&1; then
   exit 1
 fi
 
+"$SCRIPT_DIR/check_gcp.sh" >/dev/null
+
 REQUIRED_GCP_VARS=(PROJECT_ID ZONE MACHINE_TYPE DISK_SIZE IMAGE_FAMILY IMAGE_PROJECT INSTANCE_PREFIX)
 for var in "${REQUIRED_GCP_VARS[@]}"; do
   if [ -z "${!var:-}" ]; then
@@ -127,7 +129,7 @@ for var in "${REQUIRED_GCP_VARS[@]}"; do
 done
 
 GLOBAL_ENV_DIR="$REPO_ROOT/Product"
-ENV_FILE_LOCAL="$SCRIPT_DIR/.env"
+ENV_FILE_LOCAL="${GCP_RUNTIME_ENV_FILE:-$SCRIPT_DIR/.env}"
 ACTIVE_ENV_FILE="$ENV_FILE_LOCAL"
 
 if [ ! -f "$ACTIVE_ENV_FILE" ]; then
@@ -272,7 +274,7 @@ case "${SDK_PACKAGE_SOURCE,,}" in
     ;;
   custom)
     if [ -z "${SDK_INDEX_URL:-}" ]; then
-      printf "${MAGENTA}❌ HELLOWORLD_SDK_INDEX_URL must be set when HELLOWORLD_SDK_PACKAGE_SOURCE=custom${RESET}\n"
+      printf "${MAGENTA}❌ SDK_INDEX_URL must be set when SDK_PACKAGE_SOURCE=custom${RESET}\n"
       exit 1
     fi
     PIP_INSTALL_CMD="pip install --index-url ${SDK_INDEX_URL}"
@@ -283,7 +285,7 @@ case "${SDK_PACKAGE_SOURCE,,}" in
     TARGET_REGISTRY="custom index"
     ;;
   *)
-    printf "${MAGENTA}❌ HELLOWORLD_SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom${RESET}\n"
+    printf "${MAGENTA}❌ SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom${RESET}\n"
     exit 1
     ;;
 esac
