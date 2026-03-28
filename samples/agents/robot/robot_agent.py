@@ -60,8 +60,10 @@ ui_state = {
     "reasoning": "Waiting for input",
     "speaking": "Silent",
     "memory": "0 memories",
+    "latency": "No turns yet",
     "event": "Booting robot runtime",
 }
+last_tts_ms = 0.0
 
 # Global shutdown flag
 shutdown_event = asyncio.Event()
@@ -297,7 +299,7 @@ def play_tts_sync(agent, text):
 
 async def play_tts_async(agent, text):
     """Async wrapper that runs synthesis off the event loop and plays on the main thread."""
-    global tts_available
+    global last_tts_ms, tts_available
     if disable_audio_output or not tts_available:
         set_ui_state(speaking="Unavailable" if not tts_available else "Audio disabled")
         return
@@ -305,6 +307,7 @@ async def play_tts_async(agent, text):
         loop = asyncio.get_running_loop()
         # Run blocking agent.run in a thread executor
         set_ui_state(speaking="Synthesizing reply", event="Generating speech")
+        tts_started = time.perf_counter()
         audio = await loop.run_in_executor(None, lambda: agent.run(text, model_kind="tts"))
         if audio is None:
             set_ui_state(speaking="Skipped")
@@ -321,6 +324,8 @@ async def play_tts_async(agent, text):
         # Playback serialized on the main thread
         set_ui_state(speaking="Playing audio")
         _play_audio(audio, samplerate=16000)
+        last_tts_ms = (time.perf_counter() - tts_started) * 1000
+        set_ui_state(latency=f"{ui_state['latency']} | tts {last_tts_ms:.0f}")
         set_ui_state(speaking="Idle", event="Ready for next interaction")
     except Exception as e:
         set_ui_state(speaking="Error", event=f"TTS failed: {e}")
@@ -360,6 +365,8 @@ def render_status(mic, vision, response):
     body.append(f"{clip_text(ui_state['speaking'], 72)}\n")
     body.append("Memory    ", style="bold white")
     body.append(f"{clip_text(ui_state['memory'], 72)}\n")
+    body.append("Latency   ", style="bold bright_white")
+    body.append(f"{clip_text(ui_state['latency'], 72)}\n")
     body.append("Status    ", style="bold white")
     body.append(f"{format_status()}\n")
     body.append("Event     ", style="bold white")
@@ -456,6 +463,7 @@ def render_key(mic, vision, response):
         ui_state["reasoning"],
         ui_state["speaking"],
         ui_state["memory"],
+        ui_state["latency"],
         ui_state["event"],
     )
 
@@ -499,24 +507,38 @@ async def process_task(agent, stored_responses, index, live):
             continue
 
         try:
+            turn_started = time.perf_counter()
+            stt_ms = 0
+            vision_ms = 0
+            language_ms = 0
+            embedding_ms = 0
+
             set_ui_state(hearing="Transcribing speech", event="Processing microphone input")
+            stt_started = time.perf_counter()
             text_input = agent.run(mic_audio, model_kind="stt")
+            stt_ms = (time.perf_counter() - stt_started) * 1000
             set_ui_state(hearing=clip_text(text_input or "No speech detected", 64))
 
             vision_label = None
             if cam_frame is not None:
                 set_ui_state(vision="Analyzing scene", event="Running vision model")
+                vision_started = time.perf_counter()
                 vision_raw = agent.run(cam_frame, model_kind="vision")
+                vision_ms = (time.perf_counter() - vision_started) * 1000
                 vision_label = str(vision_raw).strip() if vision_raw is not None else None
                 set_ui_state(vision=clip_text(vision_label or "No scene update", 64))
 
             context = f"(vision={vision_label})" if vision_label else ""
             set_ui_state(reasoning="Composing response", event="Running language model")
+            language_started = time.perf_counter()
             response_text = str(agent.run(f"{text_input} {context}", model_kind="language")).strip()
+            language_ms = (time.perf_counter() - language_started) * 1000
             set_ui_state(reasoning=clip_text(response_text or "No response generated", 64))
 
             set_ui_state(event="Updating memory")
+            embedding_started = time.perf_counter()
             embedding_out = agent.run(response_text, model_kind="embedding")
+            embedding_ms = (time.perf_counter() - embedding_started) * 1000
             vec = np.array(embedding_out, dtype="float32").reshape(1, -1)
             if vec.size == 0:
                 set_ui_state(event="Embedding unavailable")
@@ -532,6 +554,15 @@ async def process_task(agent, stored_responses, index, live):
             set_ui_state(memory=f"{index.ntotal} memories")
 
             augmented_text = response_text + memory_context
+            turn_ms = (time.perf_counter() - turn_started) * 1000
+            latency_summary = (
+                f"turn {turn_ms:.0f}ms | stt {stt_ms:.0f} | lang {language_ms:.0f} | "
+                f"embed {embedding_ms:.0f}"
+            )
+            if vision_ms > 0:
+                latency_summary += f" | vision {vision_ms:.0f}"
+            set_ui_state(latency=latency_summary)
+            console_log.log(f"Latency {latency_summary}")
             if tts_available:
                 if tts_queue.qsize() < 3:
                     set_ui_state(speaking="Queued for playback", event="Reply ready")
