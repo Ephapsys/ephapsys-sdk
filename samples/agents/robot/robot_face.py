@@ -2,8 +2,11 @@
 
 import asyncio
 import json
+import re
+import time
 
 from rich.console import Console, Group
+from rich.columns import Columns
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
@@ -75,6 +78,38 @@ class RobotFaceBase:
             "latest": dict(self.latest),
         }
 
+    @staticmethod
+    def extract_level(text):
+        match = re.search(r"level\s+([0-9.]+)", str(text or ""))
+        return float(match.group(1)) if match else None
+
+    @staticmethod
+    def meter(level, width=12, color="cyan"):
+        if level is None:
+            return f"[dim]{'·' * width}[/dim]"
+        normalized = max(0.0, min(level / 0.08, 1.0))
+        filled = max(1, int(round(normalized * width))) if normalized > 0 else 0
+        return f"[{color}]{'█' * filled}[/][dim]{'·' * (width - filled)}[/dim]"
+
+    @staticmethod
+    def pulse(frames, speed=6):
+        idx = int(time.time() * speed) % len(frames)
+        return frames[idx]
+
+    def format_presence(self):
+        hearing = self.ui_state.get("hearing", "").lower()
+        speaking = self.ui_state.get("speaking", "").lower()
+        reasoning = self.ui_state.get("reasoning", "").lower()
+        if "playing" in speaking or "synthesizing" in speaking or "queued" in speaking:
+            return f"[magenta]{self.pulse(['◜', '◠', '◝', '◞', '◡', '◟'], 10)} speaking[/magenta]"
+        if "transcribing" in hearing or "speech detected" in hearing or "capturing" in self.ui_state.get("event", "").lower():
+            return f"[cyan]{self.pulse(['▖', '▘', '▝', '▗'], 12)} listening[/cyan]"
+        if "composing" in reasoning or "running language" in self.ui_state.get("event", "").lower():
+            return f"[yellow]{self.pulse(['◴', '◷', '◶', '◵'], 8)} thinking[/yellow]"
+        if self.agent_status.get("enabled", False):
+            return "[green]● ready[/green]"
+        return "[cyan]◌ starting[/cyan]"
+
 
 class RobotFace(RobotFaceBase):
     def __init__(self):
@@ -84,39 +119,82 @@ class RobotFace(RobotFaceBase):
     def render_status(self, hearing_text, vision_text, response_text):
         header = Text("ASIMOV", style="bold bright_cyan")
         header.append("  trusted multimodal robot", style="dim")
+        header.append("   ")
+        header.append(self.format_presence(), style="")
 
-        body = Text()
-        body.append("Hearing   ", style="bold cyan")
-        body.append(f"{self.clip_text(self.ui_state['hearing'], 72)}\n")
-        body.append("Vision    ", style="bold green")
-        body.append(f"{self.clip_text(self.ui_state['vision'], 72)}\n")
-        body.append("Reasoning ", style="bold yellow")
-        body.append(f"{self.clip_text(self.ui_state['reasoning'], 72)}\n")
-        body.append("Speaking  ", style="bold magenta")
-        body.append(f"{self.clip_text(self.ui_state['speaking'], 72)}\n")
-        body.append("Memory    ", style="bold white")
-        body.append(f"{self.clip_text(self.ui_state['memory'], 72)}\n")
-        body.append("Latency   ", style="bold bright_white")
-        body.append(f"{self.clip_text(self.ui_state['latency'], 72)}\n")
-        body.append("Status    ", style="bold white")
-        body.append(f"{self.format_status()}\n")
-        body.append("Event     ", style="bold white")
-        body.append(self.clip_text(self.ui_state["event"], 72), style="dim")
+        hearing_level = self.extract_level(self.ui_state["hearing"])
+        reply_has_content = response_text and response_text != "-"
+        speaking_level = 0.065 if "playing" in self.ui_state["speaking"].lower() else (
+            0.04 if "queued" in self.ui_state["speaking"].lower() or "synthesizing" in self.ui_state["speaking"].lower() else None
+        )
 
-        latest = Text()
-        latest.append("Latest Hearing  ", style="bold cyan")
-        latest.append(f"{self.clip_text(hearing_text or '-', 84)}\n")
-        latest.append("Latest Vision   ", style="bold green")
-        latest.append(f"{self.clip_text(vision_text or '-', 84)}\n")
-        latest.append("Latest Reply    ", style="bold yellow")
-        latest.append(self.clip_text(response_text or "-", 84))
+        systems = Text()
+        systems.append("Hearing   ", style="bold cyan")
+        systems.append(f"{self.clip_text(self.ui_state['hearing'], 58)}\n")
+        systems.append("           ", style="bold cyan")
+        systems.append(f"{self.meter(hearing_level, color='cyan')}\n")
+        systems.append("Vision    ", style="bold green")
+        systems.append(f"{self.clip_text(self.ui_state['vision'], 58)}\n")
+        systems.append("Reasoning ", style="bold yellow")
+        systems.append(f"{self.clip_text(self.ui_state['reasoning'], 58)}\n")
+        systems.append("Speaking  ", style="bold magenta")
+        systems.append(f"{self.clip_text(self.ui_state['speaking'], 58)}\n")
+        systems.append("           ", style="bold magenta")
+        systems.append(f"{self.meter(speaking_level, color='magenta')}")
+
+        state = Text()
+        state.append("Status    ", style="bold white")
+        state.append(f"{self.format_status()}\n")
+        state.append("Event     ", style="bold white")
+        state.append(f"{self.clip_text(self.ui_state['event'], 48)}\n")
+        state.append("Memory    ", style="bold white")
+        state.append(f"{self.clip_text(self.ui_state['memory'], 48)}\n")
+        state.append("Latency   ", style="bold bright_white")
+        state.append(f"{self.clip_text(self.ui_state['latency'], 48)}")
+
+        input_panel = Text()
+        input_panel.append("Input stream\n", style="bold cyan")
+        input_panel.append("Heard     ", style="bold cyan")
+        input_panel.append(f"{self.clip_text(hearing_text or '-', 44)}\n")
+        input_panel.append("Vision    ", style="bold green")
+        input_panel.append(f"{self.clip_text(vision_text or '-', 44)}")
+
+        output_panel = Text()
+        output_panel.append("Output stream\n", style="bold magenta")
+        output_panel.append("Reply     ", style="bold yellow")
+        output_panel.append(self.clip_text(response_text or "-", 44))
+        if reply_has_content:
+            output_panel.append("\nSignal    ", style="bold magenta")
+            output_panel.append(self.meter(0.07 if "playing" in self.ui_state["speaking"].lower() else 0.04, color="magenta"))
 
         footer = Text()
         footer.append("Ctrl+C", style="bold")
         footer.append(" to exit", style="dim")
 
         return Panel(
-            Group(header, Text(""), body, Text(""), latest, Text(""), footer),
+            Group(
+                header,
+                Text(""),
+                Columns(
+                    [
+                        Panel(systems, title="Body", border_style="cyan", padding=(1, 1)),
+                        Panel(state, title="Brain", border_style="yellow", padding=(1, 1)),
+                    ],
+                    equal=True,
+                    expand=True,
+                ),
+                Text(""),
+                Columns(
+                    [
+                        Panel(input_panel, title="Perception", border_style="green", padding=(1, 1)),
+                        Panel(output_panel, title="Expression", border_style="magenta", padding=(1, 1)),
+                    ],
+                    equal=True,
+                    expand=True,
+                ),
+                Text(""),
+                footer,
+            ),
             title="Robot Console",
             border_style="bright_blue",
             padding=(1, 2),
@@ -124,6 +202,7 @@ class RobotFace(RobotFaceBase):
 
     def render_key(self, hearing_text, vision_text, response_text):
         return (
+            int(time.time() * 4),
             hearing_text or "-",
             vision_text or "-",
             response_text or "-",
