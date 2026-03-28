@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""
-Robot sample entrypoint.
-
-This sample is now structured around three in-process layers:
-- body: local sensors/actuators and device I/O
-- brain: trusted runtime, memory, reasoning, orchestration
-- face: terminal presentation for developers
-
-The process still runs locally as a single demo, but the separation is explicit
-so it can evolve toward Francisca-style body/brain/face architecture later.
-"""
+"""Robot sample launcher for local body + brain + face demo."""
 
 import asyncio
 import faulthandler
 import os
 import sys
+import threading
+import time
+import urllib.request
 
 try:
     import torch
@@ -29,9 +22,9 @@ try:
 except ImportError:
     sys.exit("[ERROR] Missing soundfile; install soundfile>=0.12.0 for TTS audio playback.")
 
-from robot_body import RobotBody
-from robot_brain import RobotBrain
-from robot_face import RobotFace
+import uvicorn
+
+from robot_face import run_terminal_face
 
 try:
     faulthandler.enable(all_threads=True)
@@ -46,25 +39,37 @@ except Exception:
     pass
 
 
-async def main():
-    shutdown_event = asyncio.Event()
-    face = RobotFace()
-    body = RobotBody(face, shutdown_event)
-    brain = RobotBrain(face, body, shutdown_event)
+def wait_for_health(url: str, timeout_s: float = 20.0):
+    deadline = time.time() + timeout_s
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as response:
+                if response.status == 200:
+                    return
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.25)
+    raise RuntimeError(f"Robot brain did not become healthy in time: {last_error}")
 
-    greeting = await brain.startup()
-    try:
-        with face.live(greeting) as live:
-            await asyncio.gather(
-                body.mic_task(),
-                body.cam_task(),
-                brain.process_task(live),
-                brain.periodic_verify(),
-                body.tts_worker(brain.agent),
-                return_exceptions=True,
-            )
-    finally:
-        body.cleanup()
+
+async def main():
+    port = int(os.getenv("ROBOT_BRAIN_PORT", "8765"))
+    server = uvicorn.Server(
+        uvicorn.Config(
+            "robot_brain_server:app",
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+        )
+    )
+
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+    wait_for_health(f"http://127.0.0.1:{port}/health")
+    await run_terminal_face(f"ws://127.0.0.1:{port}/ws/state")
+    server.should_exit = True
+    server_thread.join(timeout=3)
 
 
 if __name__ == "__main__":

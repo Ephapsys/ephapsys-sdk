@@ -48,13 +48,13 @@ fi
 if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
   echo "[CI][smoke] Robot env validation OK."
   echo "[CI][smoke] BASE_URL=$BASE_URL AGENT_ID=$AGENT_ID ANCHOR=$PERSONALIZE_ANCHOR"
-  python3 -m py_compile robot_agent.py
-  echo "[CI][smoke] robot_agent.py syntax OK."
+  python3 -m py_compile robot_agent.py robot_body.py robot_brain.py robot_brain_server.py robot_face.py
+  echo "[CI][smoke] robot sample syntax OK."
   exit 0
 fi
 
 SDK_PATH="../../../sdk/python"
-if ! python3 -c "import ephapsys, transformers, faiss, cv2, sounddevice, webrtcvad" >/dev/null 2>&1; then
+if ! python3 -c "import ephapsys, transformers, faiss, cv2, sounddevice, webrtcvad, fastapi, uvicorn, websockets" >/dev/null 2>&1; then
   if [ "${ROBOT_USE_LOCAL_SDK:-0}" = "1" ]; then
     VENV="${ROBOT_VENV:-.venv}"
     if [ ! -d "$VENV" ]; then

@@ -5,8 +5,8 @@ The agent can **hear, see, think, and speak** using offline models after being v
 
 The sample is structured as a small local `body + brain + face` demo:
 - `body` handles microphone, camera, and speaker I/O
-- `brain` owns runtime preparation, trusted verification, memory, and model orchestration
-- `face` is the terminal UI developers interact with today
+- `brain` is a local FastAPI service that owns runtime preparation, trusted verification, memory, and model orchestration
+- `face` is the terminal UI developers interact with today and connects to the brain over localhost
 
 > ⚠️ **Important Requirements Before Running**  
 > This demo will not work out of the box unless you first prepare your Ephapsys environment:  
@@ -162,9 +162,10 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 
 ## 📂 Files
 
-- `robot_agent.py` → Thin entrypoint that wires the sample together.
+- `robot_agent.py` → Thin launcher that starts the local brain server and terminal face.
 - `robot_body.py` → Device/body layer for microphone, camera, and speaker I/O.
 - `robot_brain.py` → Runtime/brain layer for verification, orchestration, and memory.
+- `robot_brain_server.py` → Local FastAPI brain service exposing runtime state over WebSocket.
 - `robot_face.py` → Terminal face layer for live developer feedback.
 - `quickstart.sh` → Creates `.env` if needed, bootstraps robot templates, then launches the sample.
 - `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh`.

@@ -74,6 +74,7 @@ class RobotBrain:
         )
 
         greeting = "Hi, my name is Asimov, at your service."
+        self.face.set_latest("-", "-", greeting)
         self.face.console_live.print(f"[cyan]🤖 Greeting: {greeting}[/cyan]")
         try:
             if self.face.agent_status.get("enabled", False) and not self.face.agent_status.get("revoked", False) and self.body.tts_available:
@@ -122,7 +123,7 @@ class RobotBrain:
                 self.face.console_log.log(f"⚠️ Verification failed: {exc}")
                 self.face.agent_status.update({"enabled": False, "revoked": True})
 
-    async def process_task(self, live):
+    async def process_task(self, live=None):
         last_render_key = None
         while not self.shutdown_event.is_set():
             mic_audio = None
@@ -130,11 +131,13 @@ class RobotBrain:
 
             if not self.face.agent_status.get("enabled", False) or self.face.agent_status.get("revoked", False):
                 self.face.set_state(event="Agent disabled or revoked", reasoning="Paused", speaking="Muted")
-                panel = self.face.render_status("-", "-", "-")
-                key = self.face.render_key("-", "-", "-")
-                if key != last_render_key:
-                    live.update(panel, refresh=True)
-                    last_render_key = key
+                self.face.set_latest("-", "-", "-")
+                if live is not None:
+                    panel = self.face.render_status("-", "-", "-")
+                    key = self.face.render_key("-", "-", "-")
+                    if key != last_render_key:
+                        live.update(panel, refresh=True)
+                        last_render_key = key
                 await asyncio.sleep(1)
                 continue
 
@@ -149,11 +152,13 @@ class RobotBrain:
 
             if mic_audio is None and cam_frame is None:
                 self.face.set_state(vision="Scanning", reasoning="Waiting for input")
-                panel = self.face.render_status("-", "-", "-")
-                key = self.face.render_key("-", "-", "-")
-                if key != last_render_key:
-                    live.update(panel)
-                    last_render_key = key
+                self.face.set_latest("-", "-", "-")
+                if live is not None:
+                    panel = self.face.render_status("-", "-", "-")
+                    key = self.face.render_key("-", "-", "-")
+                    if key != last_render_key:
+                        live.update(panel)
+                        last_render_key = key
                 await asyncio.sleep(0.2)
                 continue
 
@@ -220,11 +225,13 @@ class RobotBrain:
                         self.face.set_state(speaking="Queue saturated", event="Dropping speech playback")
                         self.face.console_log.log("TTS queue full; dropping audio playback to stay responsive.")
 
-                panel = self.face.render_status(text_input, vision_label or "-", augmented_text)
-                key = self.face.render_key(text_input, vision_label or "-", augmented_text)
-                if key != last_render_key:
-                    live.update(panel)
-                    last_render_key = key
+                self.face.set_latest(text_input, vision_label or "-", augmented_text)
+                if live is not None:
+                    panel = self.face.render_status(text_input, vision_label or "-", augmented_text)
+                    key = self.face.render_key(text_input, vision_label or "-", augmented_text)
+                    if key != last_render_key:
+                        live.update(panel)
+                        last_render_key = key
             except Exception as exc:
                 self.face.set_state(event=f"Processing error: {exc}", reasoning="Error")
                 self.face.console_log.log(f"Processing error: {exc}")

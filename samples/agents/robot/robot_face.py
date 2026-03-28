@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 
+import asyncio
+import json
+
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
 
-class RobotFace:
+class SilentConsole:
+    def print(self, *args, **kwargs):
+        return None
+
+    def log(self, *args, **kwargs):
+        return None
+
+
+class RobotFaceBase:
     def __init__(self):
-        self.console_live = Console(force_terminal=True)
         self.console_log = Console(stderr=True)
         self.agent_status = {"verified": False, "enabled": False, "revoked": False}
         self.ui_state = {
@@ -20,11 +30,20 @@ class RobotFace:
             "latency": "No turns yet",
             "event": "Booting robot runtime",
         }
+        self.latest = {"hearing": "-", "vision": "-", "reply": "-"}
 
     def set_state(self, **kwargs):
         for key, value in kwargs.items():
             if key in self.ui_state and value is not None:
                 self.ui_state[key] = str(value)
+
+    def set_latest(self, hearing=None, vision=None, reply=None):
+        if hearing is not None:
+            self.latest["hearing"] = str(hearing)
+        if vision is not None:
+            self.latest["vision"] = str(vision)
+        if reply is not None:
+            self.latest["reply"] = str(reply)
 
     @staticmethod
     def clip_text(value, limit=88):
@@ -41,6 +60,19 @@ class RobotFace:
         if not self.agent_status.get("verified", False):
             return "[yellow]VERIFYING[/yellow]"
         return "[green]ENABLED[/green]"
+
+    def snapshot(self):
+        return {
+            "agent_status": dict(self.agent_status),
+            "ui_state": dict(self.ui_state),
+            "latest": dict(self.latest),
+        }
+
+
+class RobotFace(RobotFaceBase):
+    def __init__(self):
+        super().__init__()
+        self.console_live = Console(force_terminal=True)
 
     def render_status(self, hearing_text, vision_text, response_text):
         header = Text("ASIMOV", style="bold bright_cyan")
@@ -109,3 +141,44 @@ class RobotFace:
             console=self.console_live,
             screen=True,
         )
+
+
+class RobotStateFace(RobotFaceBase):
+    def __init__(self):
+        super().__init__()
+        self.console_live = SilentConsole()
+
+
+async def run_terminal_face(ws_url: str):
+    import websockets
+
+    face = RobotFace()
+    face.startup()
+    last_key = None
+
+    async with websockets.connect(ws_url, max_size=None) as websocket:
+        first = json.loads(await websocket.recv())
+        snapshot = first.get("snapshot", first)
+        greeting = snapshot.get("latest", {}).get("reply") or "Asimov is starting..."
+        with face.live(greeting) as live:
+            while True:
+                payload = json.loads(await websocket.recv())
+                snapshot = payload.get("snapshot", payload)
+                face.agent_status.update(snapshot.get("agent_status", {}))
+                face.ui_state.update(snapshot.get("ui_state", {}))
+                face.latest.update(snapshot.get("latest", {}))
+                key = face.render_key(
+                    face.latest.get("hearing", "-"),
+                    face.latest.get("vision", "-"),
+                    face.latest.get("reply", "-"),
+                )
+                if key != last_key:
+                    live.update(
+                        face.render_status(
+                            face.latest.get("hearing", "-"),
+                            face.latest.get("vision", "-"),
+                            face.latest.get("reply", "-"),
+                        ),
+                        refresh=True,
+                    )
+                    last_key = key

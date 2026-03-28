@@ -5,6 +5,9 @@ pyaudio
 opencv-python>=4.8.0
 faiss-cpu>=1.7.4
 rich>=13.7.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+websockets>=13.0
 
 # TTS/transformers stack
 torch>=2.6.0
