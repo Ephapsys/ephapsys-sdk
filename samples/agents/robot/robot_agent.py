@@ -137,12 +137,13 @@ def _ensure_preprocessor(tts_path: str) -> bool:
 # -------------------------------------------------------------------
 # Microphone
 # -------------------------------------------------------------------
-def capture_microphone(sr=16000, chunk_ms=30, max_duration=10):
+def capture_microphone(sr=16000, chunk_ms=30, max_duration=10, max_wait_for_speech=4):
     """Capture microphone audio until silence is detected using VAD (PyAudio backend)."""
-    vad = webrtcvad.Vad(2)
+    vad = webrtcvad.Vad(int(os.getenv("ROBOT_VAD_AGGRESSIVENESS", "1")))
     chunk_size = int(sr * chunk_ms / 1000)
     buffer, silence_count = [], 0
     silence_limit = int(0.5 * 1000 / chunk_ms)
+    heard_speech = False
 
     pa = pyaudio.PyAudio()
     stream = pa.open(
@@ -161,10 +162,23 @@ def capture_microphone(sr=16000, chunk_ms=30, max_duration=10):
             chunk = np.frombuffer(data, dtype=np.int16)
             pcm = chunk.tobytes()
             is_speech = vad.is_speech(pcm, sr)
-            buffer.extend(chunk)
-            silence_count = 0 if is_speech else silence_count + 1
-            if silence_count > silence_limit:
-                break
+            level = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32) / 32768.0)))) if len(chunk) else 0.0
+            if is_speech:
+                heard_speech = True
+                set_ui_state(hearing=f"Speech detected @ level {level:.3f}", event="Capturing utterance")
+                silence_count = 0
+                buffer.extend(chunk)
+            else:
+                if heard_speech:
+                    silence_count += 1
+                    buffer.extend(chunk)
+                    set_ui_state(hearing=f"Listening for end of speech @ level {level:.3f}", event="Capturing utterance")
+                    if silence_count > silence_limit:
+                        break
+                else:
+                    set_ui_state(hearing=f"Listening on microphone @ level {level:.3f}", event="Waiting for speech")
+                    if time.time() - start_time > max_wait_for_speech:
+                        return np.array([], dtype="float32")
             if time.time() - start_time > max_duration:
                 break
     finally:
