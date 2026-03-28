@@ -644,6 +644,7 @@ async def main():
     agent_status.update({"verified": ok, "enabled": is_enabled, "revoked": is_revoked})
     set_ui_state(event="Agent verified", reasoning="Ready")
     console_live.print("[green]✅ Agent personalized and verified.[/green]")
+    console_live.print(f"[dim]Instance DID: {agent.agent_id}[/dim]")
 
     # Runtime prep
     set_ui_state(event="Preparing runtime bundles")
