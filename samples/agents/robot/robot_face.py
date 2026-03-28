@@ -30,7 +30,14 @@ class RobotFaceBase:
             "reasoning": "Starting brain",
             "speaking": "Stand by",
             "memory": "0 memories",
-            "latency": "No turns yet",
+            "latency": {
+                "turn": None,
+                "stt": None,
+                "vision": None,
+                "language": None,
+                "embedding": None,
+                "tts": None,
+            },
             "event": "Starting brain",
         }
         self.latest = {"hearing": "-", "vision": "-", "reply": "-"}
@@ -38,7 +45,12 @@ class RobotFaceBase:
     def set_state(self, **kwargs):
         for key, value in kwargs.items():
             if key in self.ui_state and value is not None:
-                self.ui_state[key] = str(value)
+                if key == "latency" and isinstance(value, dict):
+                    merged = dict(self.ui_state.get("latency", {}))
+                    merged.update(value)
+                    self.ui_state[key] = merged
+                else:
+                    self.ui_state[key] = str(value)
 
     def set_latest(self, hearing=None, vision=None, reply=None):
         if hearing is not None:
@@ -76,7 +88,10 @@ class RobotFaceBase:
     def snapshot(self):
         return {
             "agent_status": dict(self.agent_status),
-            "ui_state": dict(self.ui_state),
+            "ui_state": {
+                **self.ui_state,
+                "latency": dict(self.ui_state.get("latency", {})),
+            },
             "latest": dict(self.latest),
         }
 
@@ -123,6 +138,27 @@ class RobotFaceBase:
             return "[green]● ready[/green]"
         return "[cyan]◌ starting[/cyan]"
 
+    def latency_text(self):
+        latency = self.ui_state.get("latency", {})
+        if not isinstance(latency, dict):
+            return Text(str(latency), style="dim")
+        text = Text()
+        for label, key, style in (
+            ("Turn", "turn", "bright_white"),
+            ("STT", "stt", "cyan"),
+            ("Vision", "vision", "green"),
+            ("Language", "language", "yellow"),
+            ("Embed", "embedding", "white"),
+            ("TTS", "tts", "magenta"),
+        ):
+            value = latency.get(key)
+            text.append(f"{label:<8}", style=f"bold {style}" if style != "white" else "bold white")
+            if value is None:
+                text.append("—\n", style="dim")
+            else:
+                text.append(f"{int(value)} ms\n", style=style)
+        return text
+
 
 class RobotFace(RobotFaceBase):
     def __init__(self):
@@ -164,9 +200,9 @@ class RobotFace(RobotFaceBase):
         state.append("Event     ", style="bold white")
         state.append(f"{self.clip_text(self.ui_state['event'], 72)}\n")
         state.append("Memory    ", style="bold white")
-        state.append(f"{self.clip_text(self.ui_state['memory'], 48)}\n")
-        state.append("Latency   ", style="bold bright_white")
-        state.append(f"{self.clip_text(self.ui_state['latency'], 48)}")
+        state.append(f"{self.clip_text(self.ui_state['memory'], 48)}\n\n")
+        state.append("Latency\n", style="bold bright_white")
+        state.append_text(self.latency_text())
 
         input_panel = Text()
         input_panel.append("Input stream\n", style="bold cyan")

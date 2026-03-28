@@ -108,6 +108,7 @@ class RobotBrain:
             reasoning="Waiting for input",
             speaking="Ready" if self.body.tts_available else "Unavailable",
             memory="0 memories",
+            latency={"turn": None, "stt": None, "vision": None, "language": None, "embedding": None, "tts": None},
             event=f"Runtime ready: {', '.join(sorted(runtimes.keys()))}",
         )
         self.face.console_live.print(
@@ -257,11 +258,18 @@ class RobotBrain:
 
                 augmented_text = response_text + memory_context
                 turn_ms = (time.perf_counter() - turn_started) * 1000
-                latency = f"turn {turn_ms:.0f}ms | stt {stt_ms:.0f} | lang {language_ms:.0f} | embed {embedding_ms:.0f}"
-                if vision_ms > 0:
-                    latency += f" | vision {vision_ms:.0f}"
+                latency = {
+                    "turn": turn_ms,
+                    "stt": stt_ms,
+                    "vision": vision_ms if vision_ms > 0 else None,
+                    "language": language_ms,
+                    "embedding": embedding_ms,
+                }
                 self.face.set_state(latency=latency)
-                self.face.console_log.log(f"Latency {latency}")
+                self.face.console_log.log(
+                    f"Latency turn={turn_ms:.0f} stt={stt_ms:.0f} vision={vision_ms:.0f} "
+                    f"lang={language_ms:.0f} embed={embedding_ms:.0f}"
+                )
 
                 if self.body.tts_available:
                     if self.body.tts_queue.qsize() < 3:

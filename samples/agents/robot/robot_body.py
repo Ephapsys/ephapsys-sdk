@@ -273,7 +273,7 @@ class RobotBody:
             self.play_audio(audio, samplerate=16000)
             self.last_tts_ms = (time.perf_counter() - tts_started) * 1000
             self.face.set_state(
-                latency=f"{self.face.ui_state['latency']} | tts {self.last_tts_ms:.0f}",
+                latency={"tts": self.last_tts_ms},
                 speaking="Idle",
                 event="Ready for next interaction",
             )
