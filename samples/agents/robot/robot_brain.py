@@ -27,6 +27,7 @@ class RobotBrain:
         self.prev_world_embedding = None
         self.language_warm_task = None
         self.language_warm_done = False
+        self.awaiting_tts_done = False
         # Live per-turn vision is enabled by default again for the robot demo.
         # It can still be disabled explicitly via env when debugging other paths.
         self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
@@ -301,11 +302,13 @@ class RobotBrain:
                     latest_camera_frame = event.payload.get("frame")
                     vision_label = latest_vision_label
                     if self.live_vision_enabled and latest_camera_frame is not None:
-                        self.face.set_state(
-                            vision="Analyzing scene",
-                            reasoning="Waiting for speech",
-                            event="Camera update received",
-                        )
+                        camera_state = {
+                            "vision": "Analyzing scene",
+                            "event": "Camera update received",
+                        }
+                        if not self.awaiting_tts_done:
+                            camera_state["reasoning"] = "Waiting for speech"
+                        self.face.set_state(**camera_state)
                         vision_started = time.perf_counter()
                         vision_input = Image.fromarray(latest_camera_frame)
                         vision_raw = await self.run_blocking(self.agent.run, vision_input, model_kind="vision")
@@ -319,7 +322,7 @@ class RobotBrain:
                             vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                             world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
                             latency={"vision": vision_ms},
-                            event="Waiting for speech",
+                            event="Speaking reply" if self.awaiting_tts_done else "Waiting for speech",
                         )
                         self.face.set_latest(
                             self.face.latest.get("hearing", "-"),
@@ -345,8 +348,18 @@ class RobotBrain:
                         self.face.set_state(
                             vision=self.face.clip_text(latest_vision_label or "Camera ready", 64),
                             world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
-                            event="Waiting for speech",
+                            event="Speaking reply" if self.awaiting_tts_done else "Waiting for speech",
                         )
+                    continue
+
+                if event.kind == "tts_done":
+                    self.awaiting_tts_done = False
+                    self.body.speech_enabled = True
+                    self.face.set_state(
+                        speaking="Idle" if self.body.tts_available else "Unavailable",
+                        reasoning="Waiting for speech",
+                        event="Ready for next interaction",
+                    )
                     continue
 
                 if event.kind != "microphone":
@@ -493,6 +506,8 @@ class RobotBrain:
                 )
 
                 if self.body.tts_available:
+                    self.awaiting_tts_done = True
+                    self.body.speech_enabled = False
                     self.face.set_state(speaking="Queued for playback", event="Reply ready")
                     await self.channel.send_command("speak", text=augmented_text)
 
