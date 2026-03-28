@@ -128,7 +128,7 @@ class RobotFace(RobotFaceBase):
         header = Text("ASIMOV", style="bold bright_cyan")
         header.append("  trusted multimodal robot", style="dim")
         header.append("   ")
-        header.append(self.format_presence(), style="")
+        header.append_text(Text.from_markup(self.format_presence()))
 
         hearing_level = self.extract_level(self.ui_state["hearing"])
         reply_has_content = response_text and response_text != "-"
