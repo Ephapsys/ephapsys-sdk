@@ -57,6 +57,9 @@ class RobotBody:
         silence_count = 0
         silence_limit = int(0.5 * 1000 / chunk_ms)
         heard_speech = False
+        min_level = float(os.getenv("ROBOT_MIN_SPEECH_LEVEL", "0.008"))
+        speech_start_frames = int(os.getenv("ROBOT_SPEECH_START_FRAMES", "3"))
+        speech_run = 0
 
         pa = pyaudio.PyAudio()
         stream = pa.open(
@@ -74,9 +77,24 @@ class RobotBody:
                 data = stream.read(chunk_size, exception_on_overflow=False)
                 chunk = np.frombuffer(data, dtype=np.int16)
                 level = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32) / 32768.0)))) if len(chunk) else 0.0
-                is_speech = vad.is_speech(chunk.tobytes(), sr)
+                raw_speech = vad.is_speech(chunk.tobytes(), sr)
+                is_speech = raw_speech and level >= min_level
                 if is_speech:
+                    speech_run += 1
+                else:
+                    speech_run = 0
+
+                if not heard_speech and speech_run >= speech_start_frames:
                     heard_speech = True
+                    silence_count = 0
+                    self.face.set_state(hearing=f"Speech detected @ level {level:.3f}", event="Capturing utterance")
+                    pre_roll = chunk_size * speech_start_frames
+                    if len(buffer) > pre_roll:
+                        buffer = buffer[-pre_roll:]
+                    buffer.extend(chunk)
+                    continue
+
+                if heard_speech and is_speech:
                     self.face.set_state(hearing=f"Speech detected @ level {level:.3f}", event="Capturing utterance")
                     silence_count = 0
                     buffer.extend(chunk)
@@ -94,6 +112,9 @@ class RobotBody:
                         hearing=f"Listening on microphone @ level {level:.3f}",
                         event="Waiting for speech",
                     )
+                    buffer.extend(chunk)
+                    if len(buffer) > chunk_size * speech_start_frames * 2:
+                        buffer = buffer[-chunk_size * speech_start_frames * 2 :]
                     if time.time() - start_time > max_wait_for_speech:
                         return np.array([], dtype="float32")
                 if time.time() - start_time > max_duration:
