@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import time
+import traceback
 
 from PIL import Image
 from ephapsys.agent import TrustedAgent
@@ -18,7 +19,9 @@ class RobotBrain:
         self.agent = TrustedAgent.from_env()
         self.stored_responses = []
         self.startup_vision_label = "-"
-        self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "").lower() in ("1", "true", "yes")
+        # Live per-turn vision is disabled for now to keep the sample stable.
+        # Startup vision still runs for the initial greeting/scene impression.
+        self.live_vision_enabled = False
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
@@ -378,6 +381,7 @@ class RobotBrain:
             except Exception as exc:
                 self.face.set_state(event=f"Processing error: {exc}", reasoning="Error")
                 self.face.console_log.log(f"Processing error: {exc}")
+                self.face.console_log.log(traceback.format_exc())
             finally:
                 if event is not None:
                     self.channel.event_done()
