@@ -26,9 +26,10 @@ error() {
 }
 
 ensure_runtime_env() {
-  local venv sdk_extras requirements_ok
+  local venv sdk_extras requirements_ok sdk_source
   venv="${HELLOWORLD_VENV:-.venv}"
   sdk_extras="${HELLOWORLD_SDK_EXTRAS:-modulation}"
+  sdk_source="${HELLOWORLD_SDK_PACKAGE_SOURCE:-${SDK_PACKAGE_SOURCE:-pypi}}"
 
   if [ "${HELLOWORLD_USE_LOCAL_SDK:-0}" = "1" ]; then
     if [ ! -d "$venv" ]; then
@@ -52,8 +53,18 @@ ensure_runtime_env() {
     exit 1
   fi
 
-  info "Ensuring latest published Ephapsys SDK in $venv"
-  "$SDK_SETUP_SH" --pypi --venv "$venv" --extras "$sdk_extras"
+  case "$sdk_source" in
+    pypi|testpypi)
+      ;;
+    *)
+      error "Unsupported HELLOWORLD_SDK_PACKAGE_SOURCE: $sdk_source"
+      error "Use pypi, testpypi, or set HELLOWORLD_USE_LOCAL_SDK=1 for repo-local development."
+      exit 1
+      ;;
+  esac
+
+  info "Ensuring latest published Ephapsys SDK from $sdk_source in $venv"
+  "$SDK_SETUP_SH" "--$sdk_source" --venv "$venv" --extras "$sdk_extras"
   # shellcheck disable=SC1091
   source "$venv/bin/activate"
 
