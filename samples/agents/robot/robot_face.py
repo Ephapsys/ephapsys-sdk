@@ -80,6 +80,12 @@ class RobotFaceBase:
             "latest": dict(self.latest),
         }
 
+    def startup(self):
+        return None
+
+    def live(self, greeting):
+        raise NotImplementedError("Only interactive robot faces implement live rendering")
+
     @staticmethod
     def extract_level(text):
         match = re.search(r"level\s+([0-9.]+)", str(text or ""))
