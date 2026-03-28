@@ -44,6 +44,12 @@ class RobotBrain:
             self.face.console_log.log(f"Startup vision observation fallback: {exc}")
         return vision_label
 
+    @staticmethod
+    def build_startup_greeting(vision_label):
+        if vision_label and vision_label.strip() and vision_label.strip().lower() != "no objects detected":
+            return f"Hello. I can see {vision_label}. I'm ready when you are."
+        return "Hello. I'm ready when you are."
+
     async def startup(self):
         self.face.startup()
         self.face.set_state(
@@ -115,17 +121,20 @@ class RobotBrain:
 
         self.face.set_state(event="Observing startup scene", reasoning="Waiting for first interaction")
         startup_vision = await self.run_blocking(self.build_startup_scene_observation)
-        greeting = "Ready to interact."
+        greeting = self.build_startup_greeting(startup_vision)
         self.face.set_latest("-", startup_vision or "-", greeting)
         if startup_vision:
             self.face.set_state(vision=self.face.clip_text(startup_vision, 64))
         if startup_vision:
             self.face.console_live.print(f"[cyan]👁️ Startup vision: {startup_vision}[/cyan]")
+        if self.body.tts_available:
+            self.face.set_state(speaking="Queued for startup greeting", event="Greeting")
+            await self.channel.send_command("speak", text=greeting)
 
         self.face.set_state(
             hearing="Listening on microphone",
             vision="Scanning scene",
-            reasoning="Waiting for input",
+            reasoning="Waiting for speech",
             speaking="Idle" if self.body.tts_available else "Unavailable",
             event="Live interaction loop started",
         )
