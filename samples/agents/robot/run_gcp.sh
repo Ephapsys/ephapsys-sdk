@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 PYPROJECT="$REPO_ROOT/Product/ephapsys-sdk/sdk/python/pyproject.toml"
 META_FILE="$SCRIPT_DIR/.last_gcp_instance"
-GCP_ENV_FILE="${ROBOT_GCP_ENV_FILE:-$SCRIPT_DIR/.env.gcp}"
+GCP_ENV_FILE="${GCP_ENV_FILE:-${ROBOT_GCP_ENV_FILE:-$SCRIPT_DIR/.env.gcp}}"
 
 usage() {
   cat <<'EOF'
@@ -59,9 +59,9 @@ CPU_ONLY=true
 GPU_TYPE="${GPU_TYPE:-}"
 GPU_COUNT="${GPU_COUNT:-1}"
 GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-}"
-SDK_PACKAGE_SOURCE="${ROBOT_SDK_PACKAGE_SOURCE:-pypi}"
-SDK_INDEX_URL="${ROBOT_SDK_INDEX_URL:-}"
-SDK_EXTRA_INDEX_URL="${ROBOT_SDK_EXTRA_INDEX_URL:-}"
+SDK_PACKAGE_SOURCE="${SDK_PACKAGE_SOURCE:-${ROBOT_SDK_PACKAGE_SOURCE:-pypi}}"
+SDK_INDEX_URL="${SDK_INDEX_URL:-${ROBOT_SDK_INDEX_URL:-}}"
+SDK_EXTRA_INDEX_URL="${SDK_EXTRA_INDEX_URL:-${ROBOT_SDK_EXTRA_INDEX_URL:-}}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -108,6 +108,8 @@ if ! command -v gcloud >/dev/null 2>&1; then
   exit 1
 fi
 
+"$SCRIPT_DIR/check_gcp.sh" >/dev/null
+
 for var in PROJECT_ID ZONE MACHINE_TYPE DISK_SIZE IMAGE_FAMILY IMAGE_PROJECT INSTANCE_PREFIX; do
   if [[ -z "${!var:-}" ]]; then
     error "$var must be set in $GCP_ENV_FILE"
@@ -133,7 +135,7 @@ if [[ "$SDK_VERSION" == "0.0.0" || -z "$SDK_VERSION" ]]; then
   exit 1
 fi
 
-ENV_FILE_LOCAL="$SCRIPT_DIR/.env"
+ENV_FILE_LOCAL="${GCP_RUNTIME_ENV_FILE:-$SCRIPT_DIR/.env}"
 ACTIVE_ENV_FILE="$ENV_FILE_LOCAL"
 
 if [[ ! -f "$ACTIVE_ENV_FILE" ]]; then
@@ -233,7 +235,7 @@ case "${SDK_PACKAGE_SOURCE,,}" in
     ;;
   custom)
     if [[ -z "$SDK_INDEX_URL" ]]; then
-      error "ROBOT_SDK_INDEX_URL must be set when ROBOT_SDK_PACKAGE_SOURCE=custom"
+      error "SDK_INDEX_URL must be set when SDK_PACKAGE_SOURCE=custom"
       exit 1
     fi
     CUSTOM_INDEX_FLAGS="--index-url $(printf '%q' "$SDK_INDEX_URL")"
@@ -243,7 +245,7 @@ case "${SDK_PACKAGE_SOURCE,,}" in
     REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/robot-brain\nsource ~/.venvs/robot-brain/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install '"$CUSTOM_INDEX_FLAGS"$' "ephapsys[audio,vision,embedding]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r ~/'"$REMOTE_DIR"'/requirements_brain.txt >/dev/null'
     ;;
   *)
-    error "ROBOT_SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom"
+    error "SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom"
     exit 1
     ;;
 esac

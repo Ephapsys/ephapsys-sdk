@@ -162,6 +162,7 @@ and terminal face on your machine:
 
 ```bash
 cp .env.gcp.example .env.gcp
+./check_gcp.sh
 ./run.sh --gcp
 ```
 
@@ -173,8 +174,9 @@ Notes for `--gcp`:
 - runs `robot_remote_agent.py` locally so your body and terminal stay local
 - GCP deployment settings come from local `.env.gcp` and are not tracked
 - package-source overrides are env-based:
-  - `ROBOT_SDK_PACKAGE_SOURCE=testpypi`
-  - `ROBOT_SDK_PACKAGE_SOURCE=custom` with `ROBOT_SDK_INDEX_URL=...`
+  - `SDK_PACKAGE_SOURCE=testpypi`
+  - `SDK_PACKAGE_SOURCE=custom` with `SDK_INDEX_URL=...`
+- detailed setup: [GCP.md](/Users/aidevmac/Projects/Ephapsys/Product/ephapsys-sdk/samples/agents/robot/GCP.md)
 
 ---
 
@@ -212,6 +214,8 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 - `robot_brain_server.py` → Local FastAPI brain service exposing runtime state over WebSocket.
 - `robot_remote_agent.py` → Local remote-body client for GCP mode.
 - `robot_face.py` → Terminal face layer for live developer feedback.
+- `check_gcp.sh` → GCP preflight helper for local deployment setup.
+- `GCP.md` → focused GCP setup notes for this sample.
 - `quickstart.sh` → Creates `.env` if needed, bootstraps robot templates, then launches the sample.
 - `.env.gcp.example` → tracked template for your untracked local `.env.gcp`.
 - `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh` or `push_gcp.sh`.
