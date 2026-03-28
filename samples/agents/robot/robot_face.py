@@ -87,6 +87,10 @@ class RobotFaceBase:
             return text
         return text[: limit - 1].rstrip() + "…"
 
+    @staticmethod
+    def inline_text(value, width):
+        return RobotFaceBase.clip_text(value, width).ljust(width)
+
     def format_status(self):
         if not self.agent_status.get("verified", False) and self.ui_state.get("event") in {
             "Starting brain",
@@ -169,6 +173,10 @@ class RobotFace(RobotFaceBase):
         self.console_live = Console(force_terminal=True)
 
     def render_status(self, hearing_text, vision_text, response_text):
+        status_width = 88
+        latest_width = 100
+        activity_width = 110
+
         header = Text("ASIMOV", style="bold bright_cyan")
         header.append("  trusted multimodal robot", style="dim")
         header.append("   ")
@@ -180,17 +188,17 @@ class RobotFace(RobotFaceBase):
         state.append(status_label, style=status_style)
         state.append("\n")
         state.append("Listening ", style="bold cyan")
-        state.append(f"{self.clip_text(self.ui_state['hearing'], 88)}\n")
+        state.append(f"{self.inline_text(self.ui_state['hearing'], status_width)}\n")
         state.append("Vision    ", style="bold green")
-        state.append(f"{self.clip_text(self.ui_state['vision'], 88)}\n")
+        state.append(f"{self.inline_text(self.ui_state['vision'], status_width)}\n")
         state.append("Reasoning ", style="bold yellow")
-        state.append(f"{self.clip_text(self.ui_state['reasoning'], 88)}\n")
+        state.append(f"{self.inline_text(self.ui_state['reasoning'], status_width)}\n")
         state.append("Speaking  ", style="bold magenta")
-        state.append(f"{self.clip_text(self.ui_state['speaking'], 88)}\n")
+        state.append(f"{self.inline_text(self.ui_state['speaking'], status_width)}\n")
         state.append("Event     ", style="bold white")
-        state.append(f"{self.clip_text(self.ui_state['event'], 88)}\n")
+        state.append(f"{self.inline_text(self.ui_state['event'], status_width)}\n")
         state.append("Memory    ", style="bold white")
-        state.append(f"{self.clip_text(self.ui_state['memory'], 48)}\n")
+        state.append(f"{self.inline_text(self.ui_state['memory'], 24)}\n")
         turn = self.ui_state.get("latency", {}).get("turn")
         stt = self.ui_state.get("latency", {}).get("stt")
         language = self.ui_state.get("latency", {}).get("language")
@@ -215,19 +223,19 @@ class RobotFace(RobotFaceBase):
 
         latest = Text()
         latest.append("Heard  ", style="bold cyan")
-        latest.append(f"{self.clip_text(hearing_text or '-', 100)}\n")
+        latest.append(f"{self.inline_text(hearing_text or '-', latest_width)}\n")
         latest.append("Vision ", style="bold green")
-        latest.append(f"{self.clip_text(vision_text or '-', 100)}\n")
+        latest.append(f"{self.inline_text(vision_text or '-', latest_width)}\n")
         latest.append("Reply  ", style="bold yellow")
-        latest.append(f"{self.clip_text(response_text or '-', 100)}")
+        latest.append(f"{self.inline_text(response_text or '-', latest_width)}")
 
         activity = Text()
         if self.activity_log:
             for entry in self.activity_log[-8:]:
                 activity.append("• ", style="dim")
-                activity.append(f"{self.clip_text(entry, 110)}\n")
+                activity.append(f"{self.inline_text(entry, activity_width)}\n")
         else:
-            activity.append("No activity yet", style="dim")
+            activity.append(self.inline_text("No activity yet", activity_width), style="dim")
 
         footer = Text()
         footer.append("Ctrl+C", style="bold")
