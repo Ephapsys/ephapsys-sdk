@@ -376,6 +376,7 @@ class TrustedAgent:
             api_key,
             base_url=api_base,
             agent_instance_id=agent_id,
+            storage_dir=storage_dir,
             verify_ssl=verify_ssl,
         )
         self.verify_ssl = verify_ssl
@@ -1272,6 +1273,8 @@ class TrustedAgent:
         else:  # "none"
             ev = {"dev": True, "nonce_b64": nonce_b64, "note": "No anchor (software only)"}
 
+        ev["auth_pub_pem"] = self._ensure_auth_pub_pem()
+
         # --- Add CSR if using EJBCA
         if self._using_ejbca_backend():
             csr_pem = self._generate_csr(self.agent_id)
@@ -1519,28 +1522,7 @@ class TrustedAgent:
         evidence.update({"ak_pub_der_b64": ak_b64, "quote_b64": quote_b64, "sig_b64": sig_b64})
 
 
-        # --- SIE KEM keypair (P-256) for HPKE unwrap ---
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-
-        priv_p, pub_p = self._kem_key_paths()
-        if not priv_p.exists() or not pub_p.exists():
-            prv = ec.generate_private_key(ec.SECP256R1())
-            pub = prv.public_key()
-            priv_p.write_bytes(
-                prv.private_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption(),
-                )
-            )
-            pub_p.write_bytes(
-                pub.public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-                )
-            )
-        evidence["kem_pub_pem"] = pub_p.read_text()
+        evidence["kem_pub_pem"] = self._ensure_auth_pub_pem()
 
 
         return evidence
@@ -2218,6 +2200,29 @@ class TrustedAgent:
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"agent:{agent_id}")])
         csr = x509.CertificateSigningRequestBuilder().subject_name(subject).sign(key, hashes.SHA256())
         return csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+
+    def _ensure_auth_pub_pem(self) -> str:
+        priv_p, pub_p = self._kem_key_paths()
+        if pub_p.exists():
+            return pub_p.read_text()
+
+        _mkdir(priv_p.parent)
+        prv = ec.generate_private_key(ec.SECP256R1())
+        pub = prv.public_key()
+        priv_p.write_bytes(
+            prv.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        pub_p.write_bytes(
+            pub.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        return pub_p.read_text()
 
 
     # def _kem_key_paths(self):
