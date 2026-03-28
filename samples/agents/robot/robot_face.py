@@ -94,10 +94,15 @@ class RobotFaceBase:
     @staticmethod
     def meter(level, width=12, color="cyan"):
         if level is None:
-            return f"[dim]{'·' * width}[/dim]"
+            return Text("·" * width, style="dim")
         normalized = max(0.0, min(level / 0.08, 1.0))
         filled = max(1, int(round(normalized * width))) if normalized > 0 else 0
-        return f"[{color}]{'█' * filled}[/][dim]{'·' * (width - filled)}[/dim]"
+        text = Text()
+        if filled > 0:
+            text.append("█" * filled, style=color)
+        if width - filled > 0:
+            text.append("·" * (width - filled), style="dim")
+        return text
 
     @staticmethod
     def pulse(frames, speed=6):
@@ -140,7 +145,8 @@ class RobotFace(RobotFaceBase):
         systems.append("Hearing   ", style="bold cyan")
         systems.append(f"{self.clip_text(self.ui_state['hearing'], 58)}\n")
         systems.append("           ", style="bold cyan")
-        systems.append(f"{self.meter(hearing_level, color='cyan')}\n")
+        systems.append_text(self.meter(hearing_level, color="cyan"))
+        systems.append("\n")
         systems.append("Vision    ", style="bold green")
         systems.append(f"{self.clip_text(self.ui_state['vision'], 58)}\n")
         systems.append("Reasoning ", style="bold yellow")
@@ -148,7 +154,7 @@ class RobotFace(RobotFaceBase):
         systems.append("Speaking  ", style="bold magenta")
         systems.append(f"{self.clip_text(self.ui_state['speaking'], 58)}\n")
         systems.append("           ", style="bold magenta")
-        systems.append(f"{self.meter(speaking_level, color='magenta')}")
+        systems.append_text(self.meter(speaking_level, color="magenta"))
 
         state = Text()
         state.append("Status    ", style="bold white")
@@ -173,7 +179,9 @@ class RobotFace(RobotFaceBase):
         output_panel.append(self.clip_text(response_text or "-", 44))
         if reply_has_content:
             output_panel.append("\nSignal    ", style="bold magenta")
-            output_panel.append(self.meter(0.07 if "playing" in self.ui_state["speaking"].lower() else 0.04, color="magenta"))
+            output_panel.append_text(
+                self.meter(0.07 if "playing" in self.ui_state["speaking"].lower() else 0.04, color="magenta")
+            )
 
         footer = Text()
         footer.append("Ctrl+C", style="bold")
