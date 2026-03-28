@@ -3358,8 +3358,9 @@ class TrustedAgent:
         except ImportError:
             raise RuntimeError("Transformers/torch not installed. `pip install transformers torch soundfile`")
 
-        processor = SpeechT5Processor.from_pretrained(model_path)
-        model = SpeechT5ForTextToSpeech.from_pretrained(model_path)
+        with self._suppress_transformers_warnings():
+            processor = SpeechT5Processor.from_pretrained(model_path)
+            model = SpeechT5ForTextToSpeech.from_pretrained(model_path)
         self._apply_ecm_if_available(model, runtime)
         model = model.to(self._device())
         inputs = processor(text=str(text), return_tensors="pt").to(self._device())
@@ -3433,7 +3434,8 @@ class TrustedAgent:
                     break
             if vocoder_path is None:
                 return None
-            vocoder = VocoderCls.from_pretrained(str(vocoder_path))
+            with self._suppress_transformers_warnings():
+                vocoder = VocoderCls.from_pretrained(str(vocoder_path))
             return vocoder.to(self._device())
         except Exception:
             return None
@@ -3460,8 +3462,9 @@ class TrustedAgent:
         except ImportError:
             raise RuntimeError("Install deps: `pip install transformers torch librosa`")
 
-        processor = Wav2Vec2Processor.from_pretrained(model_path)
-        model = Wav2Vec2ForCTC.from_pretrained(model_path)
+        with self._suppress_transformers_warnings():
+            processor = Wav2Vec2Processor.from_pretrained(model_path)
+            model = Wav2Vec2ForCTC.from_pretrained(model_path)
         self._apply_ecm_if_available(model, runtime)
         model = model.to(self._device())
 
