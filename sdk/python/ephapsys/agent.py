@@ -3529,9 +3529,15 @@ class TrustedAgent:
             waveform = audio_input.numpy() if hasattr(audio_input, "numpy") else np.asarray(audio_input)
             sr = 16000
 
-        input_values = processor(waveform, sampling_rate=sr, return_tensors="pt").input_values.to(self._device())
+        processed = processor(waveform, sampling_rate=sr, return_tensors="pt")
+        if hasattr(processed, "input_values"):
+            model_inputs = {"input_values": processed.input_values.to(self._device())}
+        elif hasattr(processed, "input_features"):
+            model_inputs = {"input_features": processed.input_features.to(self._device())}
+        else:
+            raise RuntimeError("STT processor output missing input_values/input_features")
         with torch.no_grad():
-            logits = model(input_values).logits
+            logits = model(**model_inputs).logits
             pred_ids = logits.argmax(dim=-1)
         result = processor.decode(pred_ids[0])
 
