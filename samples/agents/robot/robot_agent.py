@@ -38,10 +38,10 @@ except ImportError:
     sys.exit("[ERROR] Missing soundfile; install soundfile>=0.12.0 for TTS audio playback.")
 
 from ephapsys.agent import TrustedAgent
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
-# from rich.table import Table
 from rich.panel import Panel   
+from rich.text import Text
 
 # Two consoles: one for live dashboard, one for logs
 console_live = Console(force_terminal=True)
@@ -54,6 +54,14 @@ tts_queue: asyncio.Queue = asyncio.Queue()
 
 # Global agent status tracker
 agent_status = {"verified": False, "enabled": False, "revoked": False}
+ui_state = {
+    "hearing": "Idle",
+    "vision": "Standing by",
+    "reasoning": "Waiting for input",
+    "speaking": "Silent",
+    "memory": "0 memories",
+    "event": "Booting robot runtime",
+}
 
 # Global shutdown flag
 shutdown_event = asyncio.Event()
@@ -75,6 +83,19 @@ try:
     faulthandler.enable(all_threads=True)
 except Exception:
     pass
+
+
+def set_ui_state(**kwargs):
+    for key, value in kwargs.items():
+        if key in ui_state and value is not None:
+            ui_state[key] = str(value)
+
+
+def clip_text(value, limit=88):
+    text = str(value or "-").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 # Reduce torch thread counts to avoid native crashes in TTS model init
 try:
@@ -248,47 +269,61 @@ def play_tts_sync(agent, text):
     """Run TTS on text and play audio; used inside asyncio worker."""
     global tts_available
     if disable_audio_output:
+        set_ui_state(speaking="Audio disabled")
         console_log.log("Audio output disabled; skipping TTS playback.")
         return
     if not tts_available:
+        set_ui_state(speaking="Unavailable")
         return
+    set_ui_state(speaking="Synthesizing reply", event="Generating speech")
     audio = agent.run(text, model_kind="tts")
     if audio is None:
+        set_ui_state(speaking="Skipped")
         console_log.log("TTS returned None, skipping")
         return
     audio = np.array(audio, dtype="float32")
     if audio.size == 0:
+        set_ui_state(speaking="Skipped")
         console_log.log("TTS returned empty array, skipping")
         return
     # Normalize if values look tiny or large
     max_abs = np.max(np.abs(audio))
     if max_abs > 0:
         audio = audio / max_abs * 0.8
+    set_ui_state(speaking="Playing audio")
     _play_audio(audio, samplerate=16000)
+    set_ui_state(speaking="Idle", event="Ready for next interaction")
 
 
 async def play_tts_async(agent, text):
     """Async wrapper that runs synthesis off the event loop and plays on the main thread."""
     global tts_available
     if disable_audio_output or not tts_available:
+        set_ui_state(speaking="Unavailable" if not tts_available else "Audio disabled")
         return
     try:
         loop = asyncio.get_running_loop()
         # Run blocking agent.run in a thread executor
+        set_ui_state(speaking="Synthesizing reply", event="Generating speech")
         audio = await loop.run_in_executor(None, lambda: agent.run(text, model_kind="tts"))
         if audio is None:
+            set_ui_state(speaking="Skipped")
             console_log.log("TTS returned None, skipping")
             return
         audio = np.array(audio, dtype="float32")
         if audio.size == 0:
+            set_ui_state(speaking="Skipped")
             console_log.log("TTS returned empty array, skipping")
             return
         max_abs = np.max(np.abs(audio))
         if max_abs > 0:
             audio = audio / max_abs * 0.8
         # Playback serialized on the main thread
+        set_ui_state(speaking="Playing audio")
         _play_audio(audio, samplerate=16000)
+        set_ui_state(speaking="Idle", event="Ready for next interaction")
     except Exception as e:
+        set_ui_state(speaking="Error", event=f"TTS failed: {e}")
         console_log.log(f"TTS error: {e}")
         # Disable further TTS attempts if the model assets are missing
         if "preprocessor_config" in str(e):
@@ -310,89 +345,44 @@ def format_status():
     return "[green]ENABLED[/green]"
 
 
-# -------------------------------------------------------------------
-# Main processing loop
-# -------------------------------------------------------------------
-async def process_task(agent, stored_responses, index, live):
-    """Handle mic + cam → STT → Vision → Language → Embedding → TTS."""
-    last_render_key = None
-    while not shutdown_event.is_set():
-        mic_audio, cam_frame = None, None
+def render_status(mic, vision, response):
+    header = Text("ASIMOV", style="bold bright_cyan")
+    header.append("  trusted multimodal robot", style="dim")
 
-        if not agent_status.get("enabled", False) or agent_status.get("revoked", False):
-            panel = render_status("-", "-", "-")
-            key = render_key("-", "-", "-")
-            if key != last_render_key:
-                live.update(panel, refresh=True)
-                last_render_key = key
-            await asyncio.sleep(1)
-            continue
+    body = Text()
+    body.append("Hearing   ", style="bold cyan")
+    body.append(f"{clip_text(ui_state['hearing'], 72)}\n")
+    body.append("Vision    ", style="bold green")
+    body.append(f"{clip_text(ui_state['vision'], 72)}\n")
+    body.append("Reasoning ", style="bold yellow")
+    body.append(f"{clip_text(ui_state['reasoning'], 72)}\n")
+    body.append("Speaking  ", style="bold magenta")
+    body.append(f"{clip_text(ui_state['speaking'], 72)}\n")
+    body.append("Memory    ", style="bold white")
+    body.append(f"{clip_text(ui_state['memory'], 72)}\n")
+    body.append("Status    ", style="bold white")
+    body.append(f"{format_status()}\n")
+    body.append("Event     ", style="bold white")
+    body.append(clip_text(ui_state["event"], 72), style="dim")
 
-        try:
-            mic_audio = mic_queue.get_nowait()
-        except queue.Empty:
-            pass
-        try:
-            cam_frame = cam_queue.get_nowait()
-        except queue.Empty:
-            pass
+    latest = Text()
+    latest.append("Latest Hearing  ", style="bold cyan")
+    latest.append(f"{clip_text(mic or '-', 84)}\n")
+    latest.append("Latest Vision   ", style="bold green")
+    latest.append(f"{clip_text(vision or '-', 84)}\n")
+    latest.append("Latest Reply    ", style="bold yellow")
+    latest.append(clip_text(response or "-", 84))
 
-        if mic_audio is None and cam_frame is None:
-            panel = render_status("-", "-", "-")
-            key = render_key("-", "-", "-")
-            if key != last_render_key:
-                live.update(panel)
-                last_render_key = key
-            await asyncio.sleep(0.2)
-            continue
+    footer = Text()
+    footer.append("Ctrl+C", style="bold")
+    footer.append(" to exit", style="dim")
 
-        try:
-            # STT
-            text_input = agent.run(mic_audio, model_kind="stt")
-
-            # Vision
-            vision_label = None
-            if cam_frame is not None:
-                vision_raw = agent.run(cam_frame, model_kind="vision")
-                vision_label = str(vision_raw).strip() if vision_raw is not None else None
-
-            # Language
-            context = f"(vision={vision_label})" if vision_label else ""
-            response_text = str(agent.run(f"{text_input} {context}", model_kind="language")).strip()
-
-            # Embedding + memory
-            embedding_out = agent.run(response_text, model_kind="embedding")
-            vec = np.array(embedding_out, dtype="float32").reshape(1, -1)
-            if vec.size == 0:
-                console_log.log("Empty embedding vector, skipping")
-                continue
-
-            memory_context = ""
-            if index.ntotal > 0:
-                D, I = index.search(vec, k=1)
-                memory_context = f" Previously: {stored_responses[I[0][0]]}"
-            index.add(vec)
-            stored_responses.append(response_text)
-
-            # TTS queued (serialized) to avoid PortAudio crashes
-            augmented_text = response_text + memory_context
-            if tts_available:
-                if tts_queue.qsize() < 3:
-                    await tts_queue.put(augmented_text)
-                else:
-                    console_log.log("TTS queue full; dropping audio playback to stay responsive.")
-
-            # Update panel
-            panel = render_status(text_input, vision_label or "-", augmented_text)
-            key = render_key(text_input, vision_label or "-", augmented_text)
-            if key != last_render_key:
-                live.update(panel)
-                last_render_key = key
-
-        except Exception as e:
-            console_log.log(f"Processing error: {e}")
-
-        await asyncio.sleep(0.1)
+    return Panel(
+        Group(header, Text(""), body, Text(""), latest, Text(""), footer),
+        title="Robot Console",
+        border_style="bright_blue",
+        padding=(1, 2),
+    )
 
 
 # -------------------------------------------------------------------
@@ -401,6 +391,7 @@ async def process_task(agent, stored_responses, index, live):
 async def periodic_verify(agent):
     """Background task to check agent status with backend every 5s."""
     global agent_status
+    last_snapshot = None
     while not shutdown_event.is_set():
         await asyncio.sleep(5)
         try:
@@ -409,8 +400,13 @@ async def periodic_verify(agent):
             is_enabled = status.get("enabled", False) or (status.get("status", "").lower() == "enabled")
             is_revoked = status.get("state", {}).get("revoked", False)
             agent_status.update({"verified": ok, "enabled": is_enabled, "revoked": is_revoked})
-            console_log.log(f"Periodic verify={agent_status}")
+            snapshot = (ok, is_enabled, is_revoked)
+            if snapshot != last_snapshot:
+                set_ui_state(event="Verification state updated")
+                console_log.log(f"Periodic verify={agent_status}")
+                last_snapshot = snapshot
         except Exception as e:
+            set_ui_state(event=f"Verification failed: {e}")
             console_log.log(f"⚠️ Verification failed: {e}")
             agent_status.update({"enabled": False, "revoked": True})
 
@@ -464,7 +460,106 @@ def render_key(mic, vision, response):
         vision or "-",
         response or "-",
         format_status(),
+        ui_state["hearing"],
+        ui_state["vision"],
+        ui_state["reasoning"],
+        ui_state["speaking"],
+        ui_state["memory"],
+        ui_state["event"],
     )
+
+
+# -------------------------------------------------------------------
+# Main processing loop
+# -------------------------------------------------------------------
+async def process_task(agent, stored_responses, index, live):
+    """Handle mic + cam → STT → Vision → Language → Embedding → TTS."""
+    last_render_key = None
+    while not shutdown_event.is_set():
+        mic_audio, cam_frame = None, None
+
+        if not agent_status.get("enabled", False) or agent_status.get("revoked", False):
+            set_ui_state(event="Agent disabled or revoked", reasoning="Paused", speaking="Muted")
+            panel = render_status("-", "-", "-")
+            key = render_key("-", "-", "-")
+            if key != last_render_key:
+                live.update(panel, refresh=True)
+                last_render_key = key
+            await asyncio.sleep(1)
+            continue
+
+        try:
+            mic_audio = mic_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            cam_frame = cam_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        if mic_audio is None and cam_frame is None:
+            set_ui_state(hearing="Listening", vision="Scanning", reasoning="Waiting for input")
+            panel = render_status("-", "-", "-")
+            key = render_key("-", "-", "-")
+            if key != last_render_key:
+                live.update(panel)
+                last_render_key = key
+            await asyncio.sleep(0.2)
+            continue
+
+        try:
+            set_ui_state(hearing="Transcribing speech", event="Processing microphone input")
+            text_input = agent.run(mic_audio, model_kind="stt")
+            set_ui_state(hearing=clip_text(text_input or "No speech detected", 64))
+
+            vision_label = None
+            if cam_frame is not None:
+                set_ui_state(vision="Analyzing scene", event="Running vision model")
+                vision_raw = agent.run(cam_frame, model_kind="vision")
+                vision_label = str(vision_raw).strip() if vision_raw is not None else None
+                set_ui_state(vision=clip_text(vision_label or "No scene update", 64))
+
+            context = f"(vision={vision_label})" if vision_label else ""
+            set_ui_state(reasoning="Composing response", event="Running language model")
+            response_text = str(agent.run(f"{text_input} {context}", model_kind="language")).strip()
+            set_ui_state(reasoning=clip_text(response_text or "No response generated", 64))
+
+            set_ui_state(event="Updating memory")
+            embedding_out = agent.run(response_text, model_kind="embedding")
+            vec = np.array(embedding_out, dtype="float32").reshape(1, -1)
+            if vec.size == 0:
+                set_ui_state(event="Embedding unavailable")
+                console_log.log("Empty embedding vector, skipping")
+                continue
+
+            memory_context = ""
+            if index.ntotal > 0:
+                D, I = index.search(vec, k=1)
+                memory_context = f" Previously: {stored_responses[I[0][0]]}"
+            index.add(vec)
+            stored_responses.append(response_text)
+            set_ui_state(memory=f"{index.ntotal} memories")
+
+            augmented_text = response_text + memory_context
+            if tts_available:
+                if tts_queue.qsize() < 3:
+                    set_ui_state(speaking="Queued for playback", event="Reply ready")
+                    await tts_queue.put(augmented_text)
+                else:
+                    set_ui_state(speaking="Queue saturated", event="Dropping speech playback")
+                    console_log.log("TTS queue full; dropping audio playback to stay responsive.")
+
+            panel = render_status(text_input, vision_label or "-", augmented_text)
+            key = render_key(text_input, vision_label or "-", augmented_text)
+            if key != last_render_key:
+                live.update(panel)
+                last_render_key = key
+
+        except Exception as e:
+            set_ui_state(event=f"Processing error: {e}", reasoning="Error")
+            console_log.log(f"Processing error: {e}")
+
+        await asyncio.sleep(0.1)
 
 
 # -------------------------------------------------------------------
@@ -472,7 +567,8 @@ def render_key(mic, vision, response):
 # -------------------------------------------------------------------
 async def main():
     agent = TrustedAgent.from_env()
-    console_live.print("=== Step 1: Verify Agent ===")
+    console_live.print(Panel.fit("Asimov local runtime startup", border_style="bright_blue"))
+    console_live.print("[bold cyan]Step 1[/bold cyan] Verify agent and prepare runtime")
 
     # Startup verify
     try:
@@ -491,6 +587,7 @@ async def main():
         is_personalized = status.get("state", {}).get("personalized", False) or status.get("personalized", False)
         if not is_personalized:
             anchor = os.getenv("PERSONALIZE_ANCHOR")
+            set_ui_state(event="Personalizing agent instance")
             console_live.print(f"[yellow]Agent not personalized; running personalize(anchor={anchor})...[/yellow]")
             agent.personalize(anchor=anchor)
             console_live.print(f"[green]✅ Agent personalized (instance registered in AOC).[/green]")
@@ -512,9 +609,11 @@ async def main():
     is_enabled = status.get("enabled", False) or (status.get("status", "").lower() == "enabled")
     is_revoked = status.get("state", {}).get("revoked", False)
     agent_status.update({"verified": ok, "enabled": is_enabled, "revoked": is_revoked})
+    set_ui_state(event="Agent verified", reasoning="Ready")
     console_live.print("[green]✅ Agent personalized and verified.[/green]")
 
     # Runtime prep
+    set_ui_state(event="Preparing runtime bundles")
     runtimes = agent.prepare_runtime()
     tts_runtime = runtimes.get("tts") or {}
     tts_path = tts_runtime.get("model_path")
@@ -523,7 +622,15 @@ async def main():
         tts_available = _ensure_preprocessor(tts_path)
     else:
         tts_available = False
-    console_live.print(f"[green]✅ Runtime prepared[/green] (tts_ready={tts_available}, runtimes={list(runtimes.keys())})")
+    set_ui_state(
+        speaking="Ready" if tts_available else "Unavailable",
+        memory="0 memories",
+        event=f"Runtime ready: {', '.join(sorted(runtimes.keys()))}",
+    )
+    console_live.print(
+        f"[green]✅ Runtime prepared[/green] "
+        f"(voice={'ready' if tts_available else 'unavailable'}, models={', '.join(sorted(runtimes.keys()))})"
+    )
 
     # Greeting
     greeting = "Hi, my name is Asimov, at your service."
@@ -544,12 +651,19 @@ async def main():
             f"IT IS OKAY FOR NOW UNTIL WE COMPLETE MODULATION ON GCP): {e}"
         )
 
-   
+
     dim = 768
     index = faiss.IndexFlatL2(dim)
     stored_responses = []
 
-    console_live.print("[blue]Entering main loop... (Ctrl+C to exit)[/blue]")
+    set_ui_state(
+        hearing="Listening",
+        vision="Scanning",
+        reasoning="Waiting for input",
+        speaking="Idle" if tts_available else "Unavailable",
+        event="Live interaction loop started",
+    )
+    console_live.print("[blue]Entering live interaction loop...[/blue]")
 
     try:
         # Create live panel
