@@ -3497,18 +3497,18 @@ class TrustedAgent:
 
         try:
             import io
+            import json
             import numpy as np
             import torch
-            from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
+            from transformers import (
+                WhisperForConditionalGeneration,
+                WhisperProcessor,
+                Wav2Vec2ForCTC,
+                Wav2Vec2Processor,
+            )
             import librosa
         except ImportError:
             raise RuntimeError("Install deps: `pip install transformers torch librosa`")
-
-        with self._suppress_transformers_warnings():
-            processor = Wav2Vec2Processor.from_pretrained(model_path)
-            model = Wav2Vec2ForCTC.from_pretrained(model_path)
-        self._apply_ecm_if_available(model, runtime)
-        model = model.to(self._device())
 
         if isinstance(audio_input, str):
             waveform, sr = librosa.load(audio_input, sr=16000)
@@ -3529,34 +3529,41 @@ class TrustedAgent:
             waveform = audio_input.numpy() if hasattr(audio_input, "numpy") else np.asarray(audio_input)
             sr = 16000
 
-        processed = processor(waveform, sampling_rate=sr, return_tensors="pt")
-        model_forward_params = set(getattr(model.forward, "__code__", None).co_varnames if hasattr(model.forward, "__code__") else [])
-        tensor_inputs = {}
-        if hasattr(processed, "input_values"):
-            tensor_inputs["input_values"] = processed.input_values.to(self._device())
-        if hasattr(processed, "input_features"):
-            tensor_inputs["input_features"] = processed.input_features.to(self._device())
-        if hasattr(processed, "attention_mask"):
-            tensor_inputs["attention_mask"] = processed.attention_mask.to(self._device())
-        if not tensor_inputs:
-            raise RuntimeError("STT processor output missing input_values/input_features")
+        config_path = pathlib.Path(model_path) / "config.json"
+        model_type = ""
+        if config_path.exists():
+            try:
+                model_type = json.loads(config_path.read_text()).get("model_type", "")
+            except Exception:
+                model_type = ""
 
-        if "input_values" in model_forward_params:
-            primary = tensor_inputs.get("input_values") or tensor_inputs.get("input_features")
-            model_inputs = {"input_values": primary}
-        elif "input_features" in model_forward_params:
-            primary = tensor_inputs.get("input_features") or tensor_inputs.get("input_values")
-            model_inputs = {"input_features": primary}
+        if model_type == "whisper":
+            with self._suppress_transformers_warnings():
+                processor = WhisperProcessor.from_pretrained(model_path)
+                model = WhisperForConditionalGeneration.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
+            processed = processor(waveform, sampling_rate=sr, return_tensors="pt")
+            input_features = processed.input_features.to(self._device())
+            with torch.no_grad():
+                pred_ids = model.generate(input_features=input_features)
+            result = processor.batch_decode(pred_ids, skip_special_tokens=True)[0]
         else:
-            primary_key, primary_value = next(iter(tensor_inputs.items()))
-            model_inputs = {primary_key: primary_value}
-
-        if "attention_mask" in model_forward_params and "attention_mask" in tensor_inputs:
-            model_inputs["attention_mask"] = tensor_inputs["attention_mask"]
-        with torch.no_grad():
-            logits = model(**model_inputs).logits
-            pred_ids = logits.argmax(dim=-1)
-        result = processor.decode(pred_ids[0])
+            with self._suppress_transformers_warnings():
+                processor = Wav2Vec2Processor.from_pretrained(model_path)
+                model = Wav2Vec2ForCTC.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
+            processed = processor(waveform, sampling_rate=sr, return_tensors="pt")
+            input_values = processed.input_values.to(self._device())
+            attention_mask = processed.attention_mask.to(self._device()) if hasattr(processed, "attention_mask") else None
+            with torch.no_grad():
+                if attention_mask is not None:
+                    logits = model(input_values=input_values, attention_mask=attention_mask).logits
+                else:
+                    logits = model(input_values=input_values).logits
+                pred_ids = logits.argmax(dim=-1)
+            result = processor.decode(pred_ids[0])
 
         enforced_output, out_policies = self.enforce_policies_model_kind(result, "stt", "output")
         if not enforced_output:
