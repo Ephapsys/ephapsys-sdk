@@ -22,13 +22,13 @@ class RobotFaceBase:
         self.console_log = Console(stderr=True)
         self.agent_status = {"verified": False, "enabled": False, "revoked": False}
         self.ui_state = {
-            "hearing": "Idle",
-            "vision": "Standing by",
-            "reasoning": "Waiting for input",
-            "speaking": "Silent",
+            "hearing": "Stand by",
+            "vision": "Stand by",
+            "reasoning": "Starting brain",
+            "speaking": "Stand by",
             "memory": "0 memories",
             "latency": "No turns yet",
-            "event": "Booting robot runtime",
+            "event": "Starting brain",
         }
         self.latest = {"hearing": "-", "vision": "-", "reply": "-"}
 
