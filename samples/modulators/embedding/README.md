@@ -1,11 +1,11 @@
-# Trainer script for Embedding (Gemma-300M) with ephaptic coupling integration.
+# Trainer script for Embedding models with ephaptic coupling integration.
 
 ## Create Model Template and Open Modulator
 
 1. Create a Model Template (via the Create Model page):
    - Source: External repository
    - Provider: Hugging Face
-   - Repository ID: google/embeddinggemma-300m
+   - Repository ID: sentence-transformers/all-MiniLM-L6-v2
    - Model Kind: embedding
    - Revision: main
    - Hugging Face Token: hf_xxxxxxxx
