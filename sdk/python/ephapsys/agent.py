@@ -1165,7 +1165,7 @@ class TrustedAgent:
     def get_anchor_mode(self) -> Tuple[Optional[str], str]:
         """
         Returns (anchor, mode) for this agent.
-          - anchor: "tpm" | "tee" | "dsim" | "hsm" | "none" | None
+          - anchor: "tpm" | "hsm" | "none" | None
           - mode:   "secure" | "insecure"
         """
         st_full = self.get_status()
@@ -1248,8 +1248,12 @@ class TrustedAgent:
     # ---------- personalization (challenge-aware) ----------
     def personalize(self, anchor: str, evidence: Optional[dict] = None) -> Dict[str, Any]:
         anchor = (anchor or "").strip().lower()
-        if anchor not in ("tpm", "tee", "dsim", "hsm", "none"):
-            raise ValueError("anchor must be one of: 'tpm', 'tee', 'dsim', 'hsm', 'none'")
+        if anchor not in ("tpm", "hsm", "none"):
+            if anchor in ("tee", "dsim"):
+                raise ValueError(
+                    f"anchor '{anchor}' is currently disabled; supported anchors are 'tpm', 'hsm', and 'none'"
+                )
+            raise ValueError("anchor must be one of: 'tpm', 'hsm', 'none'")
 
         chal = request(
             "POST",
@@ -1264,10 +1268,6 @@ class TrustedAgent:
         # --- evidence collection
         if anchor == "tpm":
             ev = self._collect_tpm_evidence(nonce_b64) if evidence is None else evidence
-        elif anchor == "tee":
-            ev = self._collect_tee_evidence(nonce_b64) if evidence is None else evidence
-        elif anchor == "dsim":
-            ev = self._collect_dsim_evidence(nonce_b64) if evidence is None else evidence
         elif anchor == "hsm":
             ev = self._collect_hsm_evidence(nonce_b64) if evidence is None else evidence
         else:  # "none"
