@@ -178,13 +178,24 @@ def capture_microphone(sr=16000, chunk_ms=30, max_duration=10):
     return np.array(buffer, dtype="int16").astype("float32") / 32768.0
 
 
+def summarize_audio(audio: np.ndarray, sr: int = 16000) -> str:
+    if audio is None or len(audio) == 0:
+        return "No speech"
+    duration_s = len(audio) / float(sr)
+    rms = float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
+    return f"Heard {duration_s:.1f}s @ level {rms:.3f}"
+
+
 async def mic_task():
     """Continuously capture mic audio and push into queue."""
     while not shutdown_event.is_set():
         try:
+            set_ui_state(hearing="Listening on microphone", event="Waiting for speech")
             audio = capture_microphone()
+            set_ui_state(hearing=summarize_audio(audio), event="Speech captured")
             mic_queue.put(audio)
         except Exception as e:
+            set_ui_state(hearing="Microphone error", event=f"Mic failure: {e}")
             console_log.log(f"Mic capture error: {e}")
         await asyncio.sleep(0.1)
 
