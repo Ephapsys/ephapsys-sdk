@@ -15,8 +15,8 @@ cd ephapsys-sdk/samples/agents/helloworld
 `quickstart.sh` does:
 - `cp .env.example .env` if `.env` is missing, then stops and tells you to fill in the required values first
 - checks AOC for existing HelloWorld starter model/agent templates and writes their IDs into `.env` when found
-- falls back to `./push.sh --local` only if those starter templates are not available yet
-- `./run.sh --local`
+- falls back to `./push.sh` only if those starter templates are not available yet
+- `./run.sh`
 
 For the default HelloWorld flow, the only values you normally need to set in `.env` before `./quickstart.sh` are:
 - `AOC_BASE_URL`
@@ -33,8 +33,8 @@ If you want to bootstrap everything from this sample instead of manually creatin
 ```bash
 cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
-./push.sh --local
-./run.sh --local
+./push.sh
+./run.sh
 ```
 
 For GCP-based modulation instead of local modulation:
@@ -61,10 +61,10 @@ then the shortest path is:
 ```bash
 cd ephapsys-sdk/samples/agents/helloworld
 cp .env.example .env
-./run.sh --local
+./run.sh
 ```
 
-`run.sh --local` now does the local bootstrap work for you via `run_local.sh`:
+`run.sh` now defaults to local mode and does the local bootstrap work for you via `run_local.sh`:
 - chooses `PERSONALIZE_ANCHOR=none` on macOS or machines without TPM tooling
 - chooses `PERSONALIZE_ANCHOR=tpm` on Linux when `tpm2-tools` is available
 - runs the backend preflight automatically before launching the sample
@@ -78,14 +78,14 @@ Before the final command, edit `.env` and set:
 - `AOC_MODULATION_TOKEN` if you plan to use `./push.sh`
 - `AGENT_TEMPLATE_ID` only if you are skipping `./push.sh` and already have an existing template
 
-`AOC_PROVISIONING_TOKEN` must come from the AOC UI for the target environment. If it is stale or invalid, `./run.sh --local` will fail preflight even if `./push.sh` succeeded.
+`AOC_PROVISIONING_TOKEN` must come from the AOC UI for the target environment. If it is stale or invalid, `./run.sh` will fail preflight even if `./push.sh` succeeded.
 
 > ⚠️ **Important Requirements Before Running**  
 > This demo still requires a real Ephapsys organization plus valid tokens.  
 > The difference is that `./push.sh` can now bootstrap the default HelloWorld model template and agent template for you.
 >
 > If you use `./quickstart.sh` or `./push.sh`, you do **not** need to manually create the modulated language model or the agent template first.
-> If you skip `./push.sh` and go straight to `./run.sh --local`, then you must already have a valid `AGENT_TEMPLATE_ID` pointing at a published language model.
+> If you skip `./push.sh` and go straight to `./run.sh`, then you must already have a valid `AGENT_TEMPLATE_ID` pointing at a published language model.
 
 ---
 
@@ -111,7 +111,7 @@ Use this order for the least friction:
 2. Fill in `AOC_BASE_URL`, `AOC_ORG_ID`, `AOC_PROVISIONING_TOKEN`, and `AOC_MODULATION_TOKEN`.
 3. Leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run.
 4. Run `./quickstart.sh`.
-5. If you want to rerun the agent later without rebuilding assets, run `./run.sh --local`.
+5. If you want to rerun the agent later without rebuilding assets, run `./run.sh`.
 
 Keep in mind:
 - `AOC_PROVISIONING_TOKEN` is a secret developer credential copied from the AOC UI.
@@ -141,15 +141,15 @@ Complete the checklist below after publishing the new SDK and redeploying the AO
 
 1. Recommended first run: execute `./quickstart.sh`.
 2. `quickstart.sh` first looks for existing HelloWorld starter templates in AOC and writes `MODEL_TEMPLATE_ID` / `AGENT_TEMPLATE_ID` into `.env` when found.
-3. If the starter templates do not exist yet, `quickstart.sh` falls back to `./push.sh --local`, then writes the resulting IDs into `.env`.
-4. It then launches `./run.sh --local`.
+3. If the starter templates do not exist yet, `quickstart.sh` falls back to `./push.sh`, then writes the resulting IDs into `.env`.
+4. It then launches `./run.sh`.
 5. Ensure the SDK is already installed in your active Python environment, for example with `pip install ephapsys` or the `scripts/use-sdk.sh` helper.
 6. For GGUF/llama.cpp CPU runtime, also install either `llama-cpp-python` or a `llama-cli` binary.
 
 Internal repo development only:
 
 ```bash
-HELLOWORLD_USE_LOCAL_SDK=1 ./run.sh --local
+HELLOWORLD_USE_LOCAL_SDK=1 ./run.sh
 ```
 
 That opt-in path creates `.venv` if needed and installs the SDK from the local checkout instead of the published package.
@@ -193,8 +193,8 @@ If you need centralized key custody (`PERSONALIZE_ANCHOR=hsm`):
 - `helloworld_agent.py` → Minimal TrustedAgent HelloWorld demo.
   - Includes optional commented GGUF/llama.cpp hints; keep default behavior unchanged unless you enable them.
   - Includes optional commented A2A hints using `A2AClient` (send/inbox/ack) for peer-agent messaging.
-- `run.sh` → Public entrypoint. Use `--local` for local execution or `--gcp` for VM deployment.
-- `run_local.sh` → Local helper invoked by `run.sh --local`.
+- `run.sh` → Public entrypoint. No flag defaults to local execution; use `--gcp` for VM deployment.
+- `run_local.sh` → Local helper invoked by `run.sh` or `run.sh --local`.
 - `run_gcp.sh` → GCP helper invoked by `run.sh --gcp`, with `--interactive/--no-interactive` and optional `--gpu`. Starts the bot in the background, prints the log-tail command, and (by default) opens an interactive chatbot session.
 - `check_gcp.sh` → GCP preflight helper for local deployment setup.
 - `GCP.md` → focused GCP setup notes for this sample.

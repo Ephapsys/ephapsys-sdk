@@ -21,7 +21,7 @@ There is now a second deployment shape for this sample:
 >    - Get `AOC_ORG_ID` + `AOC_PROVISIONING_TOKEN` from AOC.  
 > 
 > 2. **Model Bootstrapping**  
->    - `./push.sh --local` registers the baseline robot models and idempotently publishes them by default.
+>    - `./push.sh` registers the baseline robot models and idempotently publishes them by default.
 >    - The starter embedding model is `sentence-transformers/all-MiniLM-L6-v2`, which does not require gated Hugging Face access.
 >    - Set `ROBOT_ENABLE_WORLD_MODEL=1` if you also want to bootstrap the optional V-JEPA world model (`facebook/vjepa2-vitl-fpc64-256`).
 > 
@@ -129,7 +129,7 @@ fill in the required values. Rerun `./quickstart.sh` after editing `.env`.
 Bootstrap robot templates locally:
 
 ```bash
-./push.sh --local
+./push.sh
 ```
 
 Bootstrap the same templates for a later GCP brain run:
@@ -142,19 +142,19 @@ By default this uses idempotent publish for the model templates. If you want the
 robot stack to run full modulation instead, use:
 
 ```bash
-./push.sh --local --no-idempotent
+./push.sh --no-idempotent
 ```
 
 To include the optional V-JEPA world-model template in the robot stack:
 
 ```bash
-ROBOT_ENABLE_WORLD_MODEL=1 ./push.sh --local
+ROBOT_ENABLE_WORLD_MODEL=1 ./push.sh
 ```
 
 Run the robot agent locally:
 
 ```bash
-./run.sh --local
+./run.sh
 ```
 
 Run the robot brain in GCP while keeping the local microphone, camera, speaker,
@@ -217,7 +217,7 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 - `GCP.md` → focused GCP setup notes for this sample.
 - `quickstart.sh` → Creates `.env` if needed, bootstraps robot templates, then launches the sample.
 - `.env.gcp.example` → tracked template for your untracked local `.env.gcp`.
-- `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh` or `push_gcp.sh`.
+- `push.sh` → Public bootstrap entrypoint. No flag defaults to local bootstrap; `--gcp` dispatches to GCP bootstrap.
 - `push_gcp.sh` → GCP wrapper for the same robot template bootstrap flow.
 - `run.sh` → Public run entrypoint that dispatches to `run_local.sh` or `run_gcp.sh`.
 - `run_gcp.sh` → Brain-only GCP deployer plus local remote-body launcher.
