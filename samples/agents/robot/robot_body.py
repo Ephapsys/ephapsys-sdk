@@ -212,6 +212,28 @@ class RobotBody:
             wf.writeframes(pcm16.tobytes())
         return buf.getvalue()
 
+    @staticmethod
+    def pcm16_bytes_to_wav_bytes(pcm16_bytes: bytes, samplerate: int = 16000) -> bytes:
+        pcm16 = np.frombuffer(pcm16_bytes, dtype="<i2").astype("float32") / 32768.0
+        return RobotBody.audio_to_wav_bytes(pcm16, samplerate=samplerate)
+
+    @staticmethod
+    def summarize_pcm16_bytes(pcm16_bytes: bytes, sr: int = 16000) -> str:
+        if not pcm16_bytes:
+            return "No speech"
+        audio = np.frombuffer(pcm16_bytes, dtype="<i2").astype("float32") / 32768.0
+        return RobotBody.summarize_audio(audio, sr=sr)
+
+    @staticmethod
+    def decode_image_bytes(image_bytes: bytes):
+        if not image_bytes:
+            return None
+        arr = np.frombuffer(image_bytes, dtype=np.uint8)
+        frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame_bgr is None:
+            return None
+        return frame_bgr[:, :, ::-1]
+
     async def mic_task(self):
         while not self.shutdown_event.is_set():
             try:

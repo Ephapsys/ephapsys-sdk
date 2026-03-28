@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -20,6 +21,7 @@ body = RobotBody(state_face, shutdown_event, channel)
 brain = RobotBrain(state_face, body, channel, shutdown_event)
 brain_task = None
 brain_ready = asyncio.Event()
+body_mode = os.getenv("ROBOT_BODY_MODE", "local").strip().lower()
 
 
 def _ensure_brain_task():
@@ -30,20 +32,23 @@ def _ensure_brain_task():
 
 async def _run_brain():
     try:
-        mic_task = asyncio.create_task(body.mic_task())
+        mic_task = asyncio.create_task(body.mic_task()) if body_mode in {"local", "hybrid"} else None
         tts_task = asyncio.create_task(body.tts_worker(brain.agent))
         ingest_task = asyncio.create_task(brain.ingest_channel_events())
         output_task = asyncio.create_task(brain.output_arbiter())
         await brain.startup()
         brain_ready.set()
-        await asyncio.gather(
-            body.cam_task(),
+        tasks = [
             brain.process_task(None),
             brain.periodic_verify(),
-            mic_task,
             tts_task,
             ingest_task,
             output_task,
+        ]
+        if body_mode in {"local", "hybrid"}:
+            tasks.extend([body.cam_task(), mic_task])
+        await asyncio.gather(
+            *tasks,
             return_exceptions=True,
         )
     except Exception as exc:
@@ -69,7 +74,7 @@ async def shutdown_event_handler():
 @app.get("/health")
 async def health():
     _ensure_brain_task()
-    return {"ok": True, "ready": brain_ready.is_set(), "state": state_face.snapshot()}
+    return {"ok": True, "ready": brain_ready.is_set(), "body_mode": body_mode, "state": state_face.snapshot()}
 
 
 @app.get("/schemas")
@@ -97,5 +102,50 @@ async def ws_state(ws: WebSocket):
                 await ws.send_text(json.dumps({"snapshot": snapshot}))
                 last_snapshot = snapshot
             await asyncio.sleep(0.1)
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/ws/body/audio")
+async def ws_body_audio(ws: WebSocket):
+    _ensure_brain_task()
+    await ws.accept()
+    try:
+        while True:
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            data = message.get("bytes")
+            if not data:
+                continue
+            wav_bytes = body.pcm16_bytes_to_wav_bytes(data)
+            await channel.emit_event(
+                "microphone",
+                audio=wav_bytes,
+                summary=body.summarize_pcm16_bytes(data),
+                source="remote_ws",
+            )
+            state_face.set_state(hearing="Remote microphone active", event="Remote body audio received")
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/ws/body/video")
+async def ws_body_video(ws: WebSocket):
+    _ensure_brain_task()
+    await ws.accept()
+    try:
+        while True:
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            data = message.get("bytes")
+            if not data:
+                continue
+            frame = body.decode_image_bytes(data)
+            if frame is None:
+                continue
+            await channel.emit_event("camera", frame=frame, source="remote_ws")
+            state_face.set_state(vision="Remote camera active", event="Remote body video received")
     except WebSocketDisconnect:
         return
