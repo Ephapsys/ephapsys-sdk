@@ -23,7 +23,7 @@ class RobotBrain:
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
 
-    def build_startup_greeting(self):
+    def build_startup_scene_observation(self):
         vision_label = None
         try:
             self.face.set_state(vision="Looking for a first impression", reasoning="Observing the scene")
@@ -36,30 +36,8 @@ class RobotBrain:
                 self.log_stage("Startup vision ready", t0)
                 vision_label = str(vision_raw).strip() if vision_raw is not None else None
         except Exception as exc:
-            self.face.console_log.log(f"Startup vision greeting fallback: {exc}")
-
-        prompt = (
-            "You are Asimov, a trusted multimodal robot. "
-            "Generate one short natural spoken greeting for the person in front of you. "
-            "Keep it under 18 words, warm, intelligent, and do not mention model names."
-        )
-        if vision_label:
-            prompt += f" You currently see: {vision_label}."
-        else:
-            prompt += " You do not yet have a clear visual classification."
-
-        try:
-            t0 = time.perf_counter()
-            self.face.console_log.log("[brain] Loading startup language model: Robot Language Model (Qwen/Qwen3.5-0.8B)")
-            greeting = str(self.agent.run(prompt, model_kind='language')).strip()
-            self.log_stage("Startup language greeting ready", t0)
-        except Exception as exc:
-            self.face.console_log.log(f"Startup language greeting fallback: {exc}")
-            greeting = ""
-
-        greeting = greeting or "Hello there."
-        greeting = " ".join(greeting.split())
-        return greeting, vision_label
+            self.face.console_log.log(f"Startup vision observation fallback: {exc}")
+        return vision_label
 
     async def startup(self):
         self.face.startup()
@@ -130,31 +108,14 @@ class RobotBrain:
             f"(voice={'ready' if self.body.tts_available else 'unavailable'}, models={', '.join(sorted(runtimes.keys()))})"
         )
 
-        self.face.set_state(event="Composing greeting", reasoning="Generating first response")
-        greeting, startup_vision = self.build_startup_greeting()
+        self.face.set_state(event="Observing startup scene", reasoning="Waiting for first interaction")
+        startup_vision = self.build_startup_scene_observation()
+        greeting = "Ready to interact."
         self.face.set_latest("-", startup_vision or "-", greeting)
         if startup_vision:
             self.face.set_state(vision=self.face.clip_text(startup_vision, 64))
-        self.face.console_live.print(f"[cyan]🤖 Greeting: {greeting}[/cyan]")
-        try:
-            if self.face.agent_status.get("enabled", False) and not self.face.agent_status.get("revoked", False) and self.body.tts_available:
-                self.face.console_live.print("[green]✅ GREETING TTS...")
-                t0 = time.perf_counter()
-                self.face.console_log.log("[brain] Loading greeting TTS path: Robot TTS Model (microsoft/speecht5_tts)")
-                self.body.play_tts_sync(self.agent, greeting)
-                self.log_stage("Greeting TTS complete", t0)
-                self.face.console_live.print("[green]✅ GREETING TTS done.")
-            else:
-                self.face.console_live.print("[red]❌ Skipping greeting TTS (agent not enabled or TTS assets missing)")
-        except Exception as exc:
-            reason = str(exc)
-            if "upgrade torch to at least v2.6" in reason:
-                self.face.console_log.log(
-                    "[red]⚠️ Greeting TTS unavailable: this environment needs torch>=2.6 for secure .pt loading.[/red]"
-                )
-                self.face.console_log.log(f"[dim]{reason}[/dim]")
-            else:
-                self.face.console_log.log(f"[red]⚠️ Greeting TTS failed:[/red] {reason}")
+        if startup_vision:
+            self.face.console_live.print(f"[cyan]👁️ Startup vision: {startup_vision}[/cyan]")
 
         self.face.set_state(
             hearing="Listening on microphone",
