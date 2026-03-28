@@ -55,8 +55,10 @@ class RobotBody:
         silence_limit = int(0.5 * 1000 / chunk_ms)
         heard_speech = False
         min_level = float(os.getenv("ROBOT_MIN_SPEECH_LEVEL", "0.002"))
+        quiet_level = float(os.getenv("ROBOT_QUIET_SPEECH_LEVEL", str(min_level * 0.5)))
         speech_start_frames = int(os.getenv("ROBOT_SPEECH_START_FRAMES", "2"))
         speech_run = 0
+        raw_speech_run = 0
 
         pa = pyaudio.PyAudio()
         stream = pa.open(
@@ -75,8 +77,14 @@ class RobotBody:
                 chunk = np.frombuffer(data, dtype=np.int16)
                 level = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32) / 32768.0)))) if len(chunk) else 0.0
                 raw_speech = vad.is_speech(chunk.tobytes(), sr)
+                if raw_speech:
+                    raw_speech_run += 1
+                else:
+                    raw_speech_run = 0
                 is_speech = raw_speech and level >= min_level
-                if is_speech:
+                quiet_speech = raw_speech and raw_speech_run >= speech_start_frames and level >= quiet_level
+                active_speech = is_speech or quiet_speech
+                if active_speech:
                     speech_run += 1
                 else:
                     speech_run = 0
@@ -84,15 +92,17 @@ class RobotBody:
                 if not heard_speech and speech_run >= speech_start_frames:
                     heard_speech = True
                     silence_count = 0
-                    self.face.set_state(hearing=f"Speech detected @ level {level:.3f}", event="Capturing utterance")
+                    speech_label = "Quiet speech detected" if quiet_speech and not is_speech else "Speech detected"
+                    self.face.set_state(hearing=f"{speech_label} @ level {level:.3f}", event="Capturing utterance")
                     pre_roll = chunk_size * speech_start_frames
                     if len(buffer) > pre_roll:
                         buffer = buffer[-pre_roll:]
                     buffer.extend(chunk)
                     continue
 
-                if heard_speech and is_speech:
-                    self.face.set_state(hearing=f"Speech detected @ level {level:.3f}", event="Capturing utterance")
+                if heard_speech and active_speech:
+                    speech_label = "Quiet speech detected" if quiet_speech and not is_speech else "Speech detected"
+                    self.face.set_state(hearing=f"{speech_label} @ level {level:.3f}", event="Capturing utterance")
                     silence_count = 0
                     buffer.extend(chunk)
                 elif heard_speech:
