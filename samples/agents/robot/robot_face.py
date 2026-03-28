@@ -6,7 +6,6 @@ import re
 import time
 
 from rich.console import Console, Group
-from rich.columns import Columns
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
@@ -41,24 +40,45 @@ class RobotFaceBase:
             "event": "Starting brain",
         }
         self.latest = {"hearing": "-", "vision": "-", "reply": "-"}
+        self.activity_log = []
+
+    def add_activity(self, label, value, limit=12):
+        entry = f"{label}: {self.clip_text(value, 100)}"
+        if self.activity_log and self.activity_log[-1] == entry:
+            return
+        self.activity_log.append(entry)
+        if len(self.activity_log) > limit:
+            self.activity_log = self.activity_log[-limit:]
 
     def set_state(self, **kwargs):
         for key, value in kwargs.items():
             if key in self.ui_state and value is not None:
+                previous = self.ui_state.get(key)
                 if key == "latency" and isinstance(value, dict):
                     merged = dict(self.ui_state.get("latency", {}))
                     merged.update(value)
                     self.ui_state[key] = merged
                 else:
                     self.ui_state[key] = str(value)
+                if key == "event" and str(value) != str(previous):
+                    self.add_activity("Event", value)
 
     def set_latest(self, hearing=None, vision=None, reply=None):
         if hearing is not None:
-            self.latest["hearing"] = str(hearing)
+            hearing = str(hearing)
+            if hearing != self.latest["hearing"] and hearing != "-":
+                self.add_activity("Heard", hearing)
+            self.latest["hearing"] = hearing
         if vision is not None:
-            self.latest["vision"] = str(vision)
+            vision = str(vision)
+            if vision != self.latest["vision"] and vision != "-":
+                self.add_activity("Vision", vision)
+            self.latest["vision"] = vision
         if reply is not None:
-            self.latest["reply"] = str(reply)
+            reply = str(reply)
+            if reply != self.latest["reply"] and reply != "-":
+                self.add_activity("Reply", reply)
+            self.latest["reply"] = reply
 
     @staticmethod
     def clip_text(value, limit=88):
@@ -93,6 +113,7 @@ class RobotFaceBase:
                 "latency": dict(self.ui_state.get("latency", {})),
             },
             "latest": dict(self.latest),
+            "activity_log": list(self.activity_log),
         }
 
     def startup(self):
@@ -100,24 +121,6 @@ class RobotFaceBase:
 
     def live(self, greeting):
         raise NotImplementedError("Only interactive robot faces implement live rendering")
-
-    @staticmethod
-    def extract_level(text):
-        match = re.search(r"level\s+([0-9.]+)", str(text or ""))
-        return float(match.group(1)) if match else None
-
-    @staticmethod
-    def meter(level, width=12, color="cyan"):
-        if level is None:
-            return Text("·" * width, style="dim")
-        normalized = max(0.0, min(level / 0.08, 1.0))
-        filled = max(1, int(round(normalized * width))) if normalized > 0 else 0
-        text = Text()
-        if filled > 0:
-            text.append("█" * filled, style=color)
-        if width - filled > 0:
-            text.append("·" * (width - filled), style="dim")
-        return text
 
     @staticmethod
     def pulse(frames, speed=6):
@@ -171,60 +174,62 @@ class RobotFace(RobotFaceBase):
         header.append("   ")
         header.append_text(Text.from_markup(self.format_presence()))
 
-        hearing_level = self.extract_level(self.ui_state["hearing"])
-        reply_has_content = response_text and response_text != "-"
-        speaking_level = 0.065 if "playing" in self.ui_state["speaking"].lower() else (
-            0.04 if "queued" in self.ui_state["speaking"].lower() or "synthesizing" in self.ui_state["speaking"].lower() else None
-        )
-
-        systems = Text()
-        systems.append("Hearing   ", style="bold cyan")
-        systems.append(f"{self.clip_text(self.ui_state['hearing'], 58)}\n")
-        systems.append("           ", style="bold cyan")
-        systems.append_text(self.meter(hearing_level, color="cyan"))
-        systems.append("\n")
-        systems.append("Vision    ", style="bold green")
-        systems.append(f"{self.clip_text(self.ui_state['vision'], 58)}\n")
-        systems.append("Reasoning ", style="bold yellow")
-        systems.append(f"{self.clip_text(self.ui_state['reasoning'], 58)}\n")
-        systems.append("Speaking  ", style="bold magenta")
-        systems.append(f"{self.clip_text(self.ui_state['speaking'], 58)}\n")
-        systems.append("           ", style="bold magenta")
-        systems.append_text(self.meter(speaking_level, color="magenta"))
-
         state = Text()
         status_label, status_style = self.format_status()
         state.append("Status    ", style="bold white")
         state.append(status_label, style=status_style)
         state.append("\n")
+        state.append("Listening ", style="bold cyan")
+        state.append(f"{self.clip_text(self.ui_state['hearing'], 88)}\n")
+        state.append("Vision    ", style="bold green")
+        state.append(f"{self.clip_text(self.ui_state['vision'], 88)}\n")
+        state.append("Reasoning ", style="bold yellow")
+        state.append(f"{self.clip_text(self.ui_state['reasoning'], 88)}\n")
+        state.append("Speaking  ", style="bold magenta")
+        state.append(f"{self.clip_text(self.ui_state['speaking'], 88)}\n")
         state.append("Event     ", style="bold white")
-        state.append(f"{self.clip_text(self.ui_state['event'], 72)}\n")
+        state.append(f"{self.clip_text(self.ui_state['event'], 88)}\n")
         state.append("Memory    ", style="bold white")
-        state.append(f"{self.clip_text(self.ui_state['memory'], 48)}\n\n")
-        state.append("Latency\n", style="bold bright_white")
-        state.append_text(self.latency_text())
+        state.append(f"{self.clip_text(self.ui_state['memory'], 48)}\n")
+        turn = self.ui_state.get("latency", {}).get("turn")
+        stt = self.ui_state.get("latency", {}).get("stt")
+        language = self.ui_state.get("latency", {}).get("language")
+        vision = self.ui_state.get("latency", {}).get("vision")
+        tts = self.ui_state.get("latency", {}).get("tts")
+        state.append("Latency   ", style="bold bright_white")
+        if all(v is None for v in (turn, stt, language, vision, tts)):
+            state.append("No turns yet", style="dim")
+        else:
+            parts = []
+            if turn is not None:
+                parts.append(f"turn {int(turn)}ms")
+            if stt is not None:
+                parts.append(f"stt {int(stt)}")
+            if language is not None:
+                parts.append(f"lang {int(language)}")
+            if vision is not None:
+                parts.append(f"vision {int(vision)}")
+            if tts is not None:
+                parts.append(f"tts {int(tts)}")
+            state.append(" | ".join(parts))
 
-        input_panel = Text()
-        input_panel.append("Input stream\n", style="bold cyan")
-        input_panel.append("Heard     ", style="bold cyan")
-        input_panel.append(f"{self.clip_text(hearing_text or '-', 44)}\n")
-        input_panel.append("Vision    ", style="bold green")
-        input_panel.append(f"{self.clip_text(vision_text or '-', 44)}")
+        latest = Text()
+        latest.append("Heard  ", style="bold cyan")
+        latest.append(f"{self.clip_text(hearing_text or '-', 100)}\n")
+        latest.append("Vision ", style="bold green")
+        latest.append(f"{self.clip_text(vision_text or '-', 100)}\n")
+        latest.append("Reply  ", style="bold yellow")
+        latest.append(f"{self.clip_text(response_text or '-', 100)}")
 
-        output_panel = Text()
-        output_panel.append("Output stream\n", style="bold magenta")
-        output_panel.append("Reply     ", style="bold yellow")
-        output_panel.append(self.clip_text(response_text or "-", 44))
-        if reply_has_content:
-            output_panel.append("\nSignal    ", style="bold magenta")
-            output_panel.append_text(
-                self.meter(0.07 if "playing" in self.ui_state["speaking"].lower() else 0.04, color="magenta")
-            )
+        activity = Text()
+        if self.activity_log:
+            for entry in self.activity_log[-8:]:
+                activity.append("• ", style="dim")
+                activity.append(f"{self.clip_text(entry, 110)}\n")
+        else:
+            activity.append("No activity yet", style="dim")
 
         footer = Text()
-        footer.append("Event: ", style="bold white")
-        footer.append(self.clip_text(self.ui_state["event"], 120), style="dim")
-        footer.append("\n")
         footer.append("Ctrl+C", style="bold")
         footer.append(" to exit", style="dim")
 
@@ -232,23 +237,11 @@ class RobotFace(RobotFaceBase):
             Group(
                 header,
                 Text(""),
-                Columns(
-                    [
-                        Panel(systems, title="Body", border_style="cyan", padding=(1, 1)),
-                        Panel(state, title="Brain", border_style="yellow", padding=(1, 1)),
-                    ],
-                    equal=True,
-                    expand=True,
-                ),
+                Panel(state, title="Status", border_style="cyan", padding=(1, 1)),
                 Text(""),
-                Columns(
-                    [
-                        Panel(input_panel, title="Perception", border_style="green", padding=(1, 1)),
-                        Panel(output_panel, title="Expression", border_style="magenta", padding=(1, 1)),
-                    ],
-                    equal=True,
-                    expand=True,
-                ),
+                Panel(latest, title="Latest", border_style="green", padding=(1, 1)),
+                Text(""),
+                Panel(activity, title="Recent Activity", border_style="yellow", padding=(1, 1)),
                 Text(""),
                 footer,
             ),
@@ -310,6 +303,7 @@ async def run_terminal_face(ws_url: str):
                 face.agent_status.update(snapshot.get("agent_status", {}))
                 face.ui_state.update(snapshot.get("ui_state", {}))
                 face.latest.update(snapshot.get("latest", {}))
+                face.activity_log = snapshot.get("activity_log", [])
                 key = face.render_key(
                     face.latest.get("hearing", "-"),
                     face.latest.get("vision", "-"),
