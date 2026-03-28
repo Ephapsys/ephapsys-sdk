@@ -17,6 +17,8 @@ class RobotBrain:
         self.shutdown_event = shutdown_event
         self.agent = TrustedAgent.from_env()
         self.stored_responses = []
+        self.startup_vision_label = "-"
+        self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "").lower() in ("1", "true", "yes")
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
@@ -120,6 +122,7 @@ class RobotBrain:
         self.face.set_state(event="Observing startup scene", reasoning="Waiting for first interaction")
         startup_vision = await self.run_blocking(self.build_startup_scene_observation)
         greeting = self.build_startup_greeting(startup_vision)
+        self.startup_vision_label = startup_vision or "-"
         self.face.set_latest("-", startup_vision or "-", greeting)
         if startup_vision:
             self.face.set_state(vision=self.face.clip_text(startup_vision, 64))
@@ -173,7 +176,7 @@ class RobotBrain:
     async def process_task(self, live=None):
         last_render_key = None
         latest_camera_frame = None
-        latest_vision_label = "-"
+        latest_vision_label = self.startup_vision_label or "-"
         while not self.shutdown_event.is_set():
             if not self.face.agent_status.get("enabled", False) or self.face.agent_status.get("revoked", False):
                 self.face.set_state(event="Agent disabled or revoked", reasoning="Paused", speaking="Muted")
@@ -213,8 +216,8 @@ class RobotBrain:
             try:
                 if event.kind == "camera":
                     latest_camera_frame = event.payload.get("frame")
-                    vision_label = None
-                    if latest_camera_frame is not None:
+                    vision_label = latest_vision_label
+                    if self.live_vision_enabled and latest_camera_frame is not None:
                         self.face.set_state(
                             vision="Analyzing scene",
                             reasoning="Waiting for speech",
@@ -246,6 +249,11 @@ class RobotBrain:
                             if key != last_render_key:
                                 live.update(panel)
                                 last_render_key = key
+                    elif latest_camera_frame is not None:
+                        self.face.set_state(
+                            vision=self.face.clip_text(latest_vision_label or "Camera ready", 64),
+                            event="Waiting for speech",
+                        )
                     continue
 
                 if event.kind != "microphone":
@@ -285,7 +293,7 @@ class RobotBrain:
                 self.face.set_latest(transcript, latest_vision_label or "-", self.face.latest.get("reply", "-"))
 
                 vision_label = latest_vision_label if latest_vision_label != "-" else None
-                if latest_camera_frame is not None:
+                if self.live_vision_enabled and latest_camera_frame is not None:
                     self.face.set_state(vision="Analyzing scene", event="Running vision model")
                     vision_started = time.perf_counter()
                     vision_input = Image.fromarray(latest_camera_frame)
