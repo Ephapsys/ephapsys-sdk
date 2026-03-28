@@ -5,6 +5,10 @@ import os
 import sys
 import time
 import traceback
+import json
+
+import cv2
+import numpy as np
 
 from PIL import Image
 from ephapsys.agent import TrustedAgent
@@ -19,11 +23,20 @@ class RobotBrain:
         self.agent = TrustedAgent.from_env()
         self.stored_responses = []
         self.startup_vision_label = "-"
+        self.latest_world_summary = "-"
+        self.latest_scene_summary = "-"
+        self.latest_camera_frame = None
+        self.prev_world_embedding = None
         self.language_warm_task = None
         self.language_warm_done = False
         # Live per-turn vision is enabled by default again for the robot demo.
         # It can still be disabled explicitly via env when debugging other paths.
         self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
+        self.world_enabled = os.getenv("ROBOT_ENABLE_WORLD_MODEL", "1").lower() not in ("0", "false", "no")
+        self.world_runtime = None
+        self.world_model = None
+        self.world_device = None
+        self.world_image_size = 256
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
@@ -38,6 +51,7 @@ class RobotBrain:
             self.face.set_state(vision="Looking for a first impression", reasoning="Observing the scene")
             frame = self.body.capture_startup_frame()
             if frame is not None:
+                self.latest_camera_frame = frame
                 t0 = time.perf_counter()
                 self.face.console_log.log("[brain] Loading startup vision model: Robot Vision Model (hustvl/yolos-base)")
                 vision_input = Image.fromarray(frame)
@@ -47,6 +61,91 @@ class RobotBrain:
         except Exception as exc:
             self.face.console_log.log(f"Startup vision observation fallback: {exc}")
         return vision_label
+
+    def load_world_model(self):
+        if self.world_model is not None or not self.world_runtime:
+            return self.world_model
+        try:
+            import torch
+            from transformers import VJEPA2Model
+        except ImportError as exc:
+            self.face.console_log.log(f"World model unavailable: {exc}")
+            self.world_enabled = False
+            return None
+
+        model_path = self.world_runtime.get("model_path")
+        try:
+            cfg_path = os.path.join(model_path, "config.json")
+            if os.path.exists(cfg_path):
+                data = json.loads(open(cfg_path, "r").read())
+                self.world_image_size = int(data.get("image_size") or self.world_image_size)
+            self.face.console_log.log("[brain] Loading world model: Robot World Model (facebook/vjepa2-vitl-fpc64-256)")
+            model = VJEPA2Model.from_pretrained(model_path)
+            self.agent._apply_ecm_if_available(model, self.world_runtime)
+            self.world_device = self.agent._device()
+            self.world_model = model.to(self.world_device)
+            return self.world_model
+        except Exception as exc:
+            self.face.console_log.log(f"World model load failed: {exc}")
+            self.world_enabled = False
+            return None
+
+    def encode_world_frame(self, frame):
+        model = self.load_world_model()
+        if model is None:
+            return None
+        import torch
+
+        resized = cv2.resize(frame, (self.world_image_size, self.world_image_size), interpolation=cv2.INTER_LINEAR)
+        arr = resized.astype("float32") / 255.0
+        arr = (arr - 0.5) / 0.5
+        tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).unsqueeze(0)
+        tensor = torch.cat([tensor, tensor], dim=1).to(self.world_device)
+        with torch.no_grad():
+            outputs = model(pixel_values_videos=tensor, skip_predictor=True)
+        hidden = outputs.last_hidden_state
+        return hidden.mean(dim=tuple(range(1, hidden.ndim))).detach().cpu().numpy()
+
+    def compute_world_summary(self, frame, vision_label):
+        movement_phrase = "scene steady"
+        motion_score = None
+        if self.latest_camera_frame is not None and frame is not self.latest_camera_frame:
+            prev_small = cv2.resize(self.latest_camera_frame, (64, 64), interpolation=cv2.INTER_AREA)
+            curr_small = cv2.resize(frame, (64, 64), interpolation=cv2.INTER_AREA)
+            motion_score = float(np.mean(np.abs(curr_small.astype("float32") - prev_small.astype("float32"))) / 255.0)
+
+        world_delta = None
+        if self.world_enabled:
+            try:
+                current_embedding = self.encode_world_frame(frame)
+                if current_embedding is not None and self.prev_world_embedding is not None:
+                    prev = self.prev_world_embedding
+                    curr = current_embedding
+                    denom = (np.linalg.norm(prev) * np.linalg.norm(curr)) or 1.0
+                    world_delta = float(1.0 - np.dot(prev, curr) / denom)
+                if current_embedding is not None:
+                    self.prev_world_embedding = current_embedding
+            except Exception as exc:
+                self.face.console_log.log(f"World summary fallback: {exc}")
+
+        activity_score = max(motion_score or 0.0, world_delta or 0.0)
+        if activity_score >= 0.16:
+            movement_phrase = "significant movement"
+        elif activity_score >= 0.05:
+            movement_phrase = "movement detected"
+
+        vision_text = (vision_label or "").strip().lower()
+        if vision_text and vision_text != "no objects detected":
+            if "person" in vision_text and activity_score >= 0.05:
+                return "person moving in view"
+            if "person" in vision_text:
+                return "person present"
+            if activity_score >= 0.05:
+                return f"{vision_label}; {movement_phrase}"
+            return str(vision_label)
+        if activity_score >= 0.05:
+            return movement_phrase
+        return "scene clear"
 
     @staticmethod
     def build_startup_greeting(vision_label):
@@ -119,6 +218,9 @@ class RobotBrain:
         self.face.console_log.log("[brain] Preparing runtime bundles")
         runtimes = await self.run_blocking(self.agent.prepare_runtime)
         self.log_stage("Runtime bundles prepared", t0)
+        self.world_runtime = runtimes.get("world")
+        if self.world_runtime is None:
+            self.world_enabled = False
         tts_path = (runtimes.get("tts") or {}).get("model_path")
         self.body.tts_available = await self.run_blocking(self.body.ensure_preprocessor, tts_path) if tts_path else False
         self.face.set_state(
@@ -138,11 +240,14 @@ class RobotBrain:
 
         self.face.set_state(event="Observing startup scene", reasoning="Waiting for first interaction")
         startup_vision = await self.run_blocking(self.build_startup_scene_observation)
+        if self.latest_camera_frame is not None:
+            self.latest_world_summary = self.compute_world_summary(self.latest_camera_frame, startup_vision)
+        self.latest_scene_summary = self.latest_world_summary if self.latest_world_summary != "-" else (startup_vision or "-")
         greeting = self.build_startup_greeting(startup_vision)
         self.startup_vision_label = startup_vision or "-"
-        self.face.set_latest("-", startup_vision or "-", greeting)
+        self.face.set_latest("-", self.latest_scene_summary, greeting)
         if startup_vision:
-            self.face.set_state(vision=self.face.clip_text(startup_vision, 64))
+            self.face.set_state(vision=self.face.clip_text(self.latest_scene_summary, 64))
         if startup_vision:
             self.face.console_live.print(f"[cyan]👁️ Startup vision: {startup_vision}[/cyan]")
         if self.body.tts_available:
@@ -196,6 +301,8 @@ class RobotBrain:
         last_render_key = None
         latest_camera_frame = None
         latest_vision_label = self.startup_vision_label or "-"
+        latest_world_summary = self.latest_world_summary or "-"
+        latest_scene_summary = self.latest_scene_summary or latest_vision_label
         while not self.shutdown_event.is_set():
             if not self.face.agent_status.get("enabled", False) or self.face.agent_status.get("revoked", False):
                 self.face.set_state(event="Agent disabled or revoked", reasoning="Paused", speaking="Muted")
@@ -248,21 +355,24 @@ class RobotBrain:
                         vision_ms = (time.perf_counter() - vision_started) * 1000
                         vision_label = str(vision_raw).strip() if vision_raw is not None else None
                         latest_vision_label = vision_label or latest_vision_label
+                        latest_world_summary = self.compute_world_summary(latest_camera_frame, latest_vision_label)
+                        latest_scene_summary = latest_world_summary or latest_vision_label or "-"
+                        self.latest_camera_frame = latest_camera_frame
                         self.face.set_state(
-                            vision=self.face.clip_text(vision_label or "No scene update", 64),
+                            vision=self.face.clip_text(latest_scene_summary or "No scene update", 64),
                             latency={"vision": vision_ms},
                             event="Waiting for speech",
                         )
-                        self.face.set_latest(self.face.latest.get("hearing", "-"), latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                        self.face.set_latest(self.face.latest.get("hearing", "-"), latest_scene_summary or "-", self.face.latest.get("reply", "-"))
                         if live is not None:
                             panel = self.face.render_status(
                                 self.face.latest.get("hearing", "-"),
-                                latest_vision_label or "-",
+                                latest_scene_summary or "-",
                                 self.face.latest.get("reply", "-"),
                             )
                             key = self.face.render_key(
                                 self.face.latest.get("hearing", "-"),
-                                latest_vision_label or "-",
+                                latest_scene_summary or "-",
                                 self.face.latest.get("reply", "-"),
                             )
                             if key != last_render_key:
@@ -270,7 +380,7 @@ class RobotBrain:
                                 last_render_key = key
                     elif latest_camera_frame is not None:
                         self.face.set_state(
-                            vision=self.face.clip_text(latest_vision_label or "Camera ready", 64),
+                            vision=self.face.clip_text(latest_scene_summary or latest_vision_label or "Camera ready", 64),
                             event="Waiting for speech",
                         )
                     continue
@@ -287,17 +397,17 @@ class RobotBrain:
                 language_ms = 0
                 embedding_ms = 0
 
-                self.face.set_latest(heard_summary, latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                self.face.set_latest(heard_summary, latest_scene_summary or "-", self.face.latest.get("reply", "-"))
                 self.face.set_state(hearing="Transcribing speech", event="Processing microphone input")
                 if live is not None:
                     panel = self.face.render_status(
                         heard_summary,
-                        latest_vision_label or "-",
+                        latest_scene_summary or "-",
                         self.face.latest.get("reply", "-"),
                     )
                     key = self.face.render_key(
                         heard_summary,
-                        latest_vision_label or "-",
+                        latest_scene_summary or "-",
                         self.face.latest.get("reply", "-"),
                     )
                     if key != last_render_key:
@@ -308,7 +418,7 @@ class RobotBrain:
                 stt_ms = (time.perf_counter() - stt_started) * 1000
                 transcript = self.face.clip_text(text_input or heard_summary or "No speech detected", 64)
                 self.face.set_state(hearing=transcript)
-                self.face.set_latest(transcript, latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                self.face.set_latest(transcript, latest_scene_summary or "-", self.face.latest.get("reply", "-"))
 
                 vision_label = latest_vision_label if latest_vision_label != "-" else None
                 if self.live_vision_enabled and latest_camera_frame is not None:
@@ -319,10 +429,18 @@ class RobotBrain:
                     vision_ms = (time.perf_counter() - vision_started) * 1000
                     vision_label = str(vision_raw).strip() if vision_raw is not None else None
                     latest_vision_label = vision_label or latest_vision_label
-                    self.face.set_state(vision=self.face.clip_text(vision_label or "No scene update", 64))
+                    latest_world_summary = self.compute_world_summary(latest_camera_frame, latest_vision_label)
+                    latest_scene_summary = latest_world_summary or latest_vision_label or "-"
+                    self.latest_camera_frame = latest_camera_frame
+                    self.face.set_state(vision=self.face.clip_text(latest_scene_summary or "No scene update", 64))
 
-                context = f"(vision={vision_label})" if vision_label else ""
-                self.face.set_latest(text_input, vision_label or "-", "Thinking...")
+                context_parts = []
+                if vision_label:
+                    context_parts.append(f"vision={vision_label}")
+                if latest_world_summary and latest_world_summary != "-":
+                    context_parts.append(f"world={latest_world_summary}")
+                context = f" ({'; '.join(context_parts)})" if context_parts else ""
+                self.face.set_latest(text_input, latest_scene_summary or "-", "Thinking...")
                 self.face.set_state(
                     reasoning="Composing response",
                     event="Running language model",
@@ -334,7 +452,7 @@ class RobotBrain:
                     self.language_warm_done = True
                 language_started = time.perf_counter()
                 response_text = str(await asyncio.wait_for(
-                    self.run_blocking(self.agent.run, f"{text_input} {context}", model_kind="language"),
+                    self.run_blocking(self.agent.run, f"{text_input}{context}", model_kind="language"),
                     timeout=float(os.getenv("ROBOT_LANGUAGE_TIMEOUT_S", "45")),
                 )).strip()
                 language_ms = (time.perf_counter() - language_started) * 1000
@@ -396,10 +514,10 @@ class RobotBrain:
                     self.face.set_state(speaking="Queued for playback", event="Reply ready")
                     await self.channel.send_command("speak", text=augmented_text)
 
-                self.face.set_latest(text_input, vision_label or "-", augmented_text)
+                self.face.set_latest(text_input, latest_scene_summary or "-", augmented_text)
                 if live is not None:
-                    panel = self.face.render_status(text_input, vision_label or "-", augmented_text)
-                    key = self.face.render_key(text_input, vision_label or "-", augmented_text)
+                    panel = self.face.render_status(text_input, latest_scene_summary or "-", augmented_text)
+                    key = self.face.render_key(text_input, latest_scene_summary or "-", augmented_text)
                     if key != last_render_key:
                         live.update(panel)
                         last_render_key = key
