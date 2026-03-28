@@ -288,8 +288,7 @@ class RobotBrain:
                         live.update(panel)
                         last_render_key = key
                 stt_started = time.perf_counter()
-                stt_audio = self.body.audio_to_wav_bytes(mic_audio)
-                text_input = await self.run_blocking(self.agent.run, stt_audio, model_kind="stt")
+                text_input = await self.run_blocking(self.agent.run, mic_audio, model_kind="stt")
                 stt_ms = (time.perf_counter() - stt_started) * 1000
                 transcript = self.face.clip_text(text_input or heard_summary or "No speech detected", 64)
                 self.face.set_state(hearing=transcript)
