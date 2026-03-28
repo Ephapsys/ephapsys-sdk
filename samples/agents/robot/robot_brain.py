@@ -12,9 +12,10 @@ from ephapsys.agent import TrustedAgent
 
 
 class RobotBrain:
-    def __init__(self, face, body, shutdown_event):
+    def __init__(self, face, body, channel, shutdown_event):
         self.face = face
         self.body = body
+        self.channel = channel
         self.shutdown_event = shutdown_event
         self.agent = TrustedAgent.from_env()
         self.index = faiss.IndexFlatL2(768)
@@ -149,10 +150,9 @@ class RobotBrain:
 
     async def process_task(self, live=None):
         last_render_key = None
+        latest_camera_frame = None
+        latest_vision_label = "-"
         while not self.shutdown_event.is_set():
-            mic_audio = None
-            cam_frame = None
-
             if not self.face.agent_status.get("enabled", False) or self.face.agent_status.get("revoked", False):
                 self.face.set_state(event="Agent disabled or revoked", reasoning="Paused", speaking="Muted")
                 self.face.set_latest("-", "-", "-")
@@ -166,54 +166,56 @@ class RobotBrain:
                 continue
 
             try:
-                mic_audio = self.body.mic_queue.get_nowait()
+                event = await self.channel.next_event(timeout=0.2)
             except Exception:
-                pass
-            try:
-                cam_frame = self.body.cam_queue.get_nowait()
-            except Exception:
-                pass
+                event = None
 
-            if mic_audio is None and cam_frame is None:
+            if event is None:
                 self.face.set_state(vision="Scanning", reasoning="Waiting for input")
-                self.face.set_latest("-", "-", "-")
+                self.face.set_latest("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
                 if live is not None:
-                    panel = self.face.render_status("-", "-", "-")
-                    key = self.face.render_key("-", "-", "-")
+                    panel = self.face.render_status("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                    key = self.face.render_key("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
                     if key != last_render_key:
                         live.update(panel)
                         last_render_key = key
-                await asyncio.sleep(0.2)
                 continue
 
             try:
-                if mic_audio is None:
+                if event.kind == "camera":
+                    latest_camera_frame = event.payload.get("frame")
                     vision_label = None
-                    if cam_frame is not None:
+                    if latest_camera_frame is not None:
                         self.face.set_state(
                             vision="Analyzing scene",
                             reasoning="Waiting for speech",
                             event="Camera update received",
                         )
                         vision_started = time.perf_counter()
-                        vision_input = Image.fromarray(cam_frame)
+                        vision_input = Image.fromarray(latest_camera_frame)
                         vision_raw = self.agent.run(vision_input, model_kind="vision")
                         vision_ms = (time.perf_counter() - vision_started) * 1000
                         vision_label = str(vision_raw).strip() if vision_raw is not None else None
+                        latest_vision_label = vision_label or latest_vision_label
                         self.face.set_state(
                             vision=self.face.clip_text(vision_label or "No scene update", 64),
                             latency={"vision": vision_ms},
                             event="Waiting for speech",
                         )
-                        self.face.set_latest("-", vision_label or "-", self.face.latest.get("reply", "-"))
+                        self.face.set_latest("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
                         if live is not None:
-                            panel = self.face.render_status("-", vision_label or "-", self.face.latest.get("reply", "-"))
-                            key = self.face.render_key("-", vision_label or "-", self.face.latest.get("reply", "-"))
+                            panel = self.face.render_status("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
+                            key = self.face.render_key("-", latest_vision_label or "-", self.face.latest.get("reply", "-"))
                             if key != last_render_key:
                                 live.update(panel)
                                 last_render_key = key
-                    await asyncio.sleep(0.1)
                     continue
+
+                if event.kind != "microphone":
+                    continue
+
+                mic_audio = event.payload.get("audio")
+                heard_summary = event.payload.get("summary") or "No speech"
 
                 turn_started = time.perf_counter()
                 stt_ms = 0
@@ -226,16 +228,17 @@ class RobotBrain:
                 stt_audio = self.body.audio_to_wav_bytes(mic_audio)
                 text_input = self.agent.run(stt_audio, model_kind="stt")
                 stt_ms = (time.perf_counter() - stt_started) * 1000
-                self.face.set_state(hearing=self.face.clip_text(text_input or "No speech detected", 64))
+                self.face.set_state(hearing=self.face.clip_text(text_input or heard_summary or "No speech detected", 64))
 
-                vision_label = None
-                if cam_frame is not None:
+                vision_label = latest_vision_label if latest_vision_label != "-" else None
+                if latest_camera_frame is not None:
                     self.face.set_state(vision="Analyzing scene", event="Running vision model")
                     vision_started = time.perf_counter()
-                    vision_input = Image.fromarray(cam_frame)
+                    vision_input = Image.fromarray(latest_camera_frame)
                     vision_raw = self.agent.run(vision_input, model_kind="vision")
                     vision_ms = (time.perf_counter() - vision_started) * 1000
                     vision_label = str(vision_raw).strip() if vision_raw is not None else None
+                    latest_vision_label = vision_label or latest_vision_label
                     self.face.set_state(vision=self.face.clip_text(vision_label or "No scene update", 64))
 
                 context = f"(vision={vision_label})" if vision_label else ""
@@ -279,12 +282,8 @@ class RobotBrain:
                 )
 
                 if self.body.tts_available:
-                    if self.body.tts_queue.qsize() < 3:
-                        self.face.set_state(speaking="Queued for playback", event="Reply ready")
-                        await self.body.tts_queue.put(augmented_text)
-                    else:
-                        self.face.set_state(speaking="Queue saturated", event="Dropping speech playback")
-                        self.face.console_log.log("TTS queue full; dropping audio playback to stay responsive.")
+                    self.face.set_state(speaking="Queued for playback", event="Reply ready")
+                    await self.channel.send_command("speak", text=augmented_text)
 
                 self.face.set_latest(text_input, vision_label or "-", augmented_text)
                 if live is not None:
@@ -296,5 +295,8 @@ class RobotBrain:
             except Exception as exc:
                 self.face.set_state(event=f"Processing error: {exc}", reasoning="Error")
                 self.face.console_log.log(f"Processing error: {exc}")
+            finally:
+                if event is not None:
+                    self.channel.event_done()
 
             await asyncio.sleep(0.1)

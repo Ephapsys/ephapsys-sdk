@@ -6,6 +6,7 @@ import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from robot_body import RobotBody
+from robot_channel import RobotChannel
 from robot_brain import RobotBrain
 from robot_face import RobotStateFace
 
@@ -13,8 +14,9 @@ app = FastAPI(title="Robot Brain")
 
 shutdown_event = asyncio.Event()
 state_face = RobotStateFace()
-body = RobotBody(state_face, shutdown_event)
-brain = RobotBrain(state_face, body, shutdown_event)
+channel = RobotChannel()
+body = RobotBody(state_face, shutdown_event, channel)
+brain = RobotBrain(state_face, body, channel, shutdown_event)
 brain_task = None
 brain_ready = asyncio.Event()
 

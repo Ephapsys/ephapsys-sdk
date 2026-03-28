@@ -7,6 +7,7 @@ The sample is structured as a small local `body + brain + face` demo:
 - `body` handles microphone, camera, and speaker I/O
 - `brain` is a local FastAPI service that owns runtime preparation, trusted verification, memory, and model orchestration
 - `face` is the terminal UI developers interact with today and connects to the brain over localhost
+- `channel` is the local event/command boundary between body and brain
 
 > ⚠️ **Important Requirements Before Running**  
 > This demo will not work out of the box unless you first prepare your Ephapsys environment:  
@@ -51,27 +52,40 @@ The sample is structured as a small local `body + brain + face` demo:
 
 ```mermaid
 flowchart TD
-    subgraph RobotAgent["Robot Agent Loop"]
-        V[Verify Agent Status]
-        Mic[Microphone Audio]
-        Cam[Camera Frame]
-        STT[Speech-to-Text]
-        Vision[Vision Classification]
-        Lang[Language Generation]
-        Emb[Embedding Vector + FAISS Memory]
-        TTS[Text-to-Speech (with Memory Context)]
-
-        V -->|ok| Mic
-        V -->|ok| Cam
-        Mic --> STT
-        STT --> Lang
-        Cam --> Vision
-        Vision --> Lang
-        Lang --> Emb
-        Emb --> TTS
+    subgraph Body["Body"]
+        Mic[Microphone Capture]
+        Cam[Camera Capture]
+        Speaker[Speaker Output]
     end
 
-    TTS --> Out[Speaker Output (Voice)]
+    subgraph Channel["Local Channel"]
+        Events[Events<br/>microphone, camera]
+        Commands[Commands<br/>speak]
+    end
+
+    subgraph Brain["Brain Service"]
+        V[Verify Agent Status]
+        STT[Speech-to-Text]
+        Vision[Vision Understanding]
+        Lang[Language Generation]
+        Emb[Embedding Vector + FAISS Memory]
+    end
+
+    subgraph Face["Terminal Face"]
+        UI[Live Console]
+    end
+
+    Mic --> Events
+    Cam --> Events
+    Events --> V
+    V --> STT
+    V --> Vision
+    STT --> Lang
+    Vision --> Lang
+    Lang --> Emb
+    Lang --> Commands
+    Commands --> Speaker
+    Brain --> UI
 ```
 
 ---
@@ -163,6 +177,7 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 ## 📂 Files
 
 - `robot_agent.py` → Thin launcher that starts the local brain server and terminal face.
+- `robot_channel.py` → Local typed event/command channel between body and brain.
 - `robot_body.py` → Device/body layer for microphone, camera, and speaker I/O.
 - `robot_brain.py` → Runtime/brain layer for verification, orchestration, and memory.
 - `robot_brain_server.py` → Local FastAPI brain service exposing runtime state over WebSocket.

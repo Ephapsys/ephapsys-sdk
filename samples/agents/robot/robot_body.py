@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-import queue
 import shutil
 import subprocess
 import tempfile
@@ -19,12 +18,10 @@ import webrtcvad
 
 
 class RobotBody:
-    def __init__(self, face, shutdown_event):
+    def __init__(self, face, shutdown_event, channel):
         self.face = face
         self.shutdown_event = shutdown_event
-        self.mic_queue = queue.Queue()
-        self.cam_queue = queue.Queue()
-        self.tts_queue = asyncio.Queue()
+        self.channel = channel
         self.camera_cap = None
         self.tts_available = True
         self.disable_audio_output = os.getenv("DISABLE_AUDIO", "").lower() in ("1", "true", "yes")
@@ -155,7 +152,11 @@ class RobotBody:
                 loop = asyncio.get_running_loop()
                 audio = await loop.run_in_executor(None, self.capture_microphone)
                 self.face.set_state(hearing=self.summarize_audio(audio), event="Speech captured")
-                self.mic_queue.put(audio)
+                await self.channel.emit_event(
+                    "microphone",
+                    audio=audio,
+                    summary=self.summarize_audio(audio),
+                )
             except Exception as exc:
                 self.face.set_state(hearing="Microphone error", event=f"Mic failure: {exc}")
                 self.face.console_log.log(f"Mic capture error: {exc}")
@@ -191,7 +192,7 @@ class RobotBody:
             try:
                 frame, last = self.capture_camera(self.camera_cap, 5, last)
                 if frame is not None:
-                    self.cam_queue.put(frame)
+                    await self.channel.emit_event("camera", frame=frame)
             except Exception as exc:
                 self.face.console_log.log(f"Cam capture error: {exc}")
             await asyncio.sleep(0.2)
@@ -285,18 +286,19 @@ class RobotBody:
 
     async def tts_worker(self, agent):
         while not self.shutdown_event.is_set():
-            got_item = False
+            got_command = False
             try:
-                text = await self.tts_queue.get()
-                got_item = True
-                await self.play_tts_async(agent, text)
+                command = await self.channel.next_command()
+                got_command = True
+                if command.kind == "speak":
+                    await self.play_tts_async(agent, command.payload.get("text", ""))
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 self.face.console_log.log(f"TTS worker error: {exc}")
             finally:
-                if got_item:
-                    self.tts_queue.task_done()
+                if got_command:
+                    self.channel.command_done()
 
     def cleanup(self):
         self.face.console_log.log("Cleaning up resources...")
