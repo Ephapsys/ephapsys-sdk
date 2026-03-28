@@ -108,12 +108,13 @@ class RobotBrain:
         self.face.set_state(
             hearing="Listening on microphone",
             vision="Scanning scene",
-            reasoning="Waiting for input",
-            speaking="Ready" if self.body.tts_available else "Unavailable",
+            reasoning="Preparing greeting",
+            speaking="Preparing greeting" if self.body.tts_available else "Unavailable",
             memory="0 memories",
             latency={"turn": None, "stt": None, "vision": None, "language": None, "embedding": None, "tts": None},
             event=f"Runtime ready: {', '.join(sorted(runtimes.keys()))}",
         )
+        self.face.set_latest("-", "-", "Preparing greeting...")
         self.face.console_live.print(
             f"[green]✅ Runtime prepared[/green] "
             f"(voice={'ready' if self.body.tts_available else 'unavailable'}, models={', '.join(sorted(runtimes.keys()))})"
@@ -129,7 +130,7 @@ class RobotBrain:
             self.face.console_live.print(f"[cyan]👁️ Startup vision: {startup_vision}[/cyan]")
         if self.body.tts_available:
             self.body.speech_enabled = False
-            self.face.set_state(speaking="Queued for startup greeting", event="Greeting")
+            self.face.set_state(reasoning="Greeting ready", speaking="Queued for startup greeting", event="Greeting")
             await self.channel.send_command("speak", text=greeting)
             while not self.shutdown_event.is_set():
                 event = await self.channel.next_event(timeout=0.25)
