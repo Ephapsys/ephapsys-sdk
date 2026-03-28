@@ -12,6 +12,17 @@ warn() {
   printf '[WARN] %s\n' "$*" >&2
 }
 
+prompt_yes_no() {
+  local prompt="$1"
+  local reply
+  printf '%s [y/N] ' "$prompt"
+  read -r reply || true
+  case "${reply}" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 has_robot_runtime_deps() {
   python3 -c "import ephapsys, transformers, faiss, cv2, sounddevice, webrtcvad" >/dev/null 2>&1
 }
@@ -50,7 +61,13 @@ Then rerun:
 For repo-local SDK development only, you can instead run:
   ROBOT_USE_LOCAL_SDK=1 ./run.sh --local
 EOF
-  exit 0
+
+  if [[ -t 0 ]] && prompt_yes_no "[SETUP] Install the robot runtime dependencies now?"; then
+    python3 -m pip install "ephapsys[audio,vision,embedding]"
+    python3 -m pip install -r requirements.txt
+  else
+    exit 0
+  fi
 fi
 
 ./run.sh --local
