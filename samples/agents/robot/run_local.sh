@@ -48,7 +48,7 @@ fi
 if [ "$MODE" = "smoke" ] || [ "${SAMPLE_CI_SMOKE:-0}" = "1" ]; then
   echo "[CI][smoke] Robot env validation OK."
   echo "[CI][smoke] BASE_URL=$BASE_URL AGENT_ID=$AGENT_ID ANCHOR=$PERSONALIZE_ANCHOR"
-  python3 -m py_compile robot_agent.py robot_body.py robot_brain.py robot_brain_server.py robot_face.py
+  python3 -m py_compile robot_agent.py robot_body.py robot_brain.py robot_brain_server.py robot_face.py robot_remote_agent.py
   echo "[CI][smoke] robot sample syntax OK."
   exit 0
 fi

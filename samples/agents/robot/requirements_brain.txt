@@ -1,0 +1,11 @@
+webrtcvad>=2.0.10
+opencv-python>=4.8.0
+rich>=13.7.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+websockets>=13.0
+torch>=2.6.0
+transformers>=4.46.0
+safetensors>=0.4.5
+soundfile>=0.12.0
+sentencepiece>=0.1.99

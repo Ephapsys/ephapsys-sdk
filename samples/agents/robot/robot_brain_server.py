@@ -24,6 +24,8 @@ remote_audio = RemoteAudioSegmenter(body, channel)
 brain_task = None
 brain_ready = asyncio.Event()
 body_mode = os.getenv("ROBOT_BODY_MODE", "local").strip().lower()
+remote_control_clients = set()
+remote_control_lock = asyncio.Lock()
 
 
 def _ensure_brain_task():
@@ -35,7 +37,8 @@ def _ensure_brain_task():
 async def _run_brain():
     try:
         mic_task = asyncio.create_task(body.mic_task()) if body_mode in {"local", "hybrid"} else None
-        tts_task = asyncio.create_task(body.tts_worker(brain.agent))
+        tts_task = asyncio.create_task(body.tts_worker(brain.agent)) if body_mode in {"local", "hybrid"} else None
+        remote_tts_task = asyncio.create_task(remote_body_control_task()) if body_mode == "remote" else None
         ingest_task = asyncio.create_task(brain.ingest_channel_events())
         output_task = asyncio.create_task(brain.output_arbiter())
         await brain.startup()
@@ -43,10 +46,13 @@ async def _run_brain():
         tasks = [
             brain.process_task(None),
             brain.periodic_verify(),
-            tts_task,
             ingest_task,
             output_task,
         ]
+        if tts_task is not None:
+            tasks.append(tts_task)
+        if remote_tts_task is not None:
+            tasks.append(remote_tts_task)
         if body_mode in {"local", "hybrid"}:
             tasks.extend([body.cam_task(), mic_task])
         await asyncio.gather(
@@ -77,6 +83,48 @@ async def shutdown_event_handler():
 async def health():
     _ensure_brain_task()
     return {"ok": True, "ready": brain_ready.is_set(), "body_mode": body_mode, "state": state_face.snapshot()}
+
+
+async def _broadcast_remote_command(payload: dict) -> bool:
+    async with remote_control_lock:
+        clients = list(remote_control_clients)
+    if not clients:
+        return False
+    stale = []
+    delivered = False
+    for ws in clients:
+        try:
+            await ws.send_text(json.dumps(payload))
+            delivered = True
+        except Exception:
+            stale.append(ws)
+    if stale:
+        async with remote_control_lock:
+            for ws in stale:
+                remote_control_clients.discard(ws)
+    return delivered
+
+
+async def remote_body_control_task():
+    while not shutdown_event.is_set():
+        command = await channel.next_command()
+        try:
+            payload = {"type": "command", "kind": command.kind, "payload": command.payload}
+            delivered = await _broadcast_remote_command(payload)
+            if delivered:
+                state_face.set_state(
+                    speaking="Remote body active" if command.kind == "speak" else state_face.ui_state.get("speaking", "Idle"),
+                    body="Remote body active" if command.kind == "body_control" else state_face.ui_state.get("body", "Idle"),
+                    event=f"Remote command sent: {command.kind}",
+                )
+                continue
+            if command.kind == "speak":
+                await channel.emit_event("tts_done", text=command.payload.get("text", ""), duration_ms=0.0, error="No remote body client connected")
+            elif command.kind == "body_control":
+                await channel.emit_event("body_control_done", action=command.payload.get("action", "idle"), error="No remote body client connected")
+            state_face.set_state(event=f"Remote body unavailable for {command.kind}")
+        finally:
+            channel.command_done()
 
 
 @app.get("/schemas")
@@ -146,3 +194,37 @@ async def ws_body_video(ws: WebSocket):
             state_face.set_state(vision="Remote camera active", event="Remote body video received")
     except WebSocketDisconnect:
         return
+
+
+@app.websocket("/ws/body/control")
+async def ws_body_control(ws: WebSocket):
+    _ensure_brain_task()
+    await ws.accept()
+    async with remote_control_lock:
+        remote_control_clients.add(ws)
+    state_face.set_state(body="Remote body connected", event="Remote body control connected")
+    try:
+        while True:
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            text = message.get("text")
+            if not text:
+                continue
+            payload = json.loads(text)
+            if payload.get("type") != "event":
+                continue
+            kind = payload.get("kind")
+            event_payload = payload.get("payload") or {}
+            if kind == "tts_done":
+                await channel.emit_event("tts_done", **event_payload)
+            elif kind == "body_control_done":
+                await channel.emit_event("body_control_done", **event_payload)
+            else:
+                await channel.emit_event(kind or "remote_event", **event_payload)
+    except WebSocketDisconnect:
+        return
+    finally:
+        async with remote_control_lock:
+            remote_control_clients.discard(ws)
+        state_face.set_state(body="Remote body disconnected", event="Remote body control disconnected")

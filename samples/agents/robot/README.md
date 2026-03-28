@@ -9,6 +9,10 @@ The sample is structured as a small local `body + brain + face` demo:
 - `face` is the terminal UI developers interact with today and connects to the brain over localhost
 - `channel` is the local event/command boundary between body and brain
 
+There is now a second deployment shape for this sample:
+- local mode: `body + brain + face` all run on the same machine
+- GCP mode: only the `brain` runs remotely; the local machine keeps the `body` and terminal `face`
+
 > ⚠️ **Important Requirements Before Running**  
 > This demo will not work out of the box unless you first prepare your Ephapsys environment:  
 > 
@@ -128,6 +132,12 @@ Bootstrap robot templates locally:
 ./push.sh --local
 ```
 
+Bootstrap the same templates for a later GCP brain run:
+
+```bash
+./push.sh --gcp
+```
+
 By default this uses idempotent publish for the model templates. If you want the
 robot stack to run full modulation instead, use:
 
@@ -146,6 +156,20 @@ Run the robot agent locally:
 ```bash
 ./run.sh --local
 ```
+
+Run the robot brain in GCP while keeping the local microphone, camera, speaker,
+and terminal face on your machine:
+
+```bash
+./run.sh --gcp --staging
+```
+
+Notes for `--gcp`:
+- it provisions a Compute Engine VM
+- installs the current SDK version from TestPyPI by default
+- starts only `robot_brain_server.py` on the VM
+- opens an SSH tunnel back to `localhost`
+- runs `robot_remote_agent.py` locally so your body and terminal stay local
 
 ---
 
@@ -181,12 +205,17 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 - `robot_body.py` → Device/body layer for microphone, camera, and speaker I/O.
 - `robot_brain.py` → Runtime/brain layer for verification, orchestration, and memory.
 - `robot_brain_server.py` → Local FastAPI brain service exposing runtime state over WebSocket.
+- `robot_remote_agent.py` → Local remote-body client for GCP mode.
 - `robot_face.py` → Terminal face layer for live developer feedback.
 - `quickstart.sh` → Creates `.env` if needed, bootstraps robot templates, then launches the sample.
-- `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh`.
-- `run.sh` → Public local run entrypoint that dispatches to `run_local.sh`.
+- `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh` or `push_gcp.sh`.
+- `push_gcp.sh` → GCP wrapper for the same robot template bootstrap flow.
+- `run.sh` → Public run entrypoint that dispatches to `run_local.sh` or `run_gcp.sh`.
+- `run_gcp.sh` → Brain-only GCP deployer plus local remote-body launcher.
+- `run_brain_server.sh` → Brain-only server launcher used by GCP mode.
 - `push_local.sh` → Current local implementation for model registration/modulation and agent template creation.
 - `run_local.sh` → Current local implementation for robot runtime startup.
+- `requirements_brain.txt` → Minimal dependency set for brain-only remote deployment.
 - `.env` → cp .env.example .env
 
 For repo-local SDK development only, you can force the sample to install the SDK

@@ -12,9 +12,17 @@ from io import BytesIO
 
 import cv2
 import numpy as np
-import pyaudio
-import sounddevice as sd
 import webrtcvad
+
+try:
+    import pyaudio
+except ImportError:
+    pyaudio = None
+
+try:
+    import sounddevice as sd
+except ImportError:
+    sd = None
 
 
 class RobotBody:
@@ -88,6 +96,8 @@ class RobotBody:
             return False
 
     def capture_microphone(self, sr=16000, chunk_ms=30, max_duration=10, max_wait_for_speech=4):
+        if pyaudio is None:
+            raise RuntimeError("pyaudio is required for local microphone capture")
         vad = webrtcvad.Vad(int(os.getenv("ROBOT_VAD_AGGRESSIVENESS", "1")))
         chunk_size = int(sr * chunk_ms / 1000)
         buffer = []
@@ -307,6 +317,8 @@ class RobotBody:
             if player:
                 subprocess.run(player, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
+                if sd is None:
+                    raise RuntimeError("sounddevice is required for direct audio playback")
                 sd.play(audio, samplerate=samplerate, blocking=True)
                 sd.wait()
                 sd.stop()
