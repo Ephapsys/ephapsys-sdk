@@ -57,7 +57,9 @@ class RobotFaceBase:
 
     def format_status(self):
         if not self.agent_status.get("verified", False) and self.ui_state.get("event") in {
+            "Starting brain",
             "Booting robot runtime",
+            "Verifying agent",
             "Personalizing agent instance",
             "Preparing runtime bundles",
             "Agent verified",

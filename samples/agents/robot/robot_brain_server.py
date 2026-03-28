@@ -31,6 +31,14 @@ async def _run_brain():
             body.tts_worker(brain.agent),
             return_exceptions=True,
         )
+    except Exception as exc:
+        state_face.set_state(
+            reasoning="Startup blocked",
+            speaking="Unavailable",
+            event=f"Startup failure: {exc}",
+        )
+        state_face.console_log.log(f"Robot brain startup failed: {exc}")
+        raise
     finally:
         brain_ready.clear()
 
