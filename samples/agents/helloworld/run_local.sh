@@ -25,6 +25,18 @@ error() {
   echo "[ERROR] $*" >&2
 }
 
+current_agent_display_id() {
+  local persisted_id
+  persisted_id=".ephapsys_state/agent_id"
+  if [ -f "$persisted_id" ]; then
+    if persisted_id="$(tr -d '[:space:]' < "$persisted_id")" && [ -n "$persisted_id" ]; then
+      printf '%s\n' "$persisted_id"
+      return
+    fi
+  fi
+  printf '%s\n' "${AGENT_TEMPLATE_ID:-}"
+}
+
 ensure_runtime_env() {
   local venv sdk_extras requirements_ok sdk_source
   venv="${HELLOWORLD_VENV:-.venv}"
@@ -197,7 +209,7 @@ run_preflight
 
 info "Starting HelloWorld Agent..."
 echo "  BASE_URL: $BASE_URL"
-echo "  AGENT_ID: $AGENT_ID"
+echo "  AGENT_ID: $(current_agent_display_id)"
 echo "  ANCHOR:   $PERSONALIZE_ANCHOR"
 
 python3 helloworld_agent.py
