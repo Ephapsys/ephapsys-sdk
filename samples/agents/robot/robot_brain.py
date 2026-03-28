@@ -128,8 +128,19 @@ class RobotBrain:
         if startup_vision:
             self.face.console_live.print(f"[cyan]👁️ Startup vision: {startup_vision}[/cyan]")
         if self.body.tts_available:
+            self.body.speech_enabled = False
             self.face.set_state(speaking="Queued for startup greeting", event="Greeting")
             await self.channel.send_command("speak", text=greeting)
+            while not self.shutdown_event.is_set():
+                event = await self.channel.next_event(timeout=0.25)
+                if event is None:
+                    continue
+                try:
+                    if event.kind == "tts_done":
+                        break
+                finally:
+                    self.channel.event_done()
+        self.body.speech_enabled = True
 
         self.face.set_state(
             hearing="Listening on microphone",

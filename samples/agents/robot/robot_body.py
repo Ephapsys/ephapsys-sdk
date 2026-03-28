@@ -27,6 +27,7 @@ class RobotBody:
         self.disable_audio_output = os.getenv("DISABLE_AUDIO", "").lower() in ("1", "true", "yes")
         self.audio_debug = os.getenv("AUDIO_DEBUG", "").lower() in ("1", "true", "yes")
         self.last_tts_ms = 0.0
+        self.speech_enabled = False
 
     def ensure_preprocessor(self, tts_path: str) -> bool:
         try:
@@ -77,6 +78,19 @@ class RobotBody:
                 chunk = np.frombuffer(data, dtype=np.int16)
                 level = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32) / 32768.0)))) if len(chunk) else 0.0
                 raw_speech = vad.is_speech(chunk.tobytes(), sr)
+                if not self.speech_enabled:
+                    vad_hint = "speech" if raw_speech else "noise"
+                    self.face.set_state(
+                        hearing=f"Microphone armed @ level {level:.3f} ({vad_hint})",
+                        event="Greeting",
+                    )
+                    start_time = time.time()
+                    buffer = []
+                    speech_run = 0
+                    raw_speech_run = 0
+                    silence_count = 0
+                    heard_speech = False
+                    continue
                 if raw_speech:
                     raw_speech_run += 1
                 else:
@@ -265,6 +279,7 @@ class RobotBody:
     async def play_tts_async(self, agent, text):
         if self.disable_audio_output or not self.tts_available:
             self.face.set_state(speaking="Unavailable" if not self.tts_available else "Audio disabled")
+            await self.channel.emit_event("tts_done", text=text, duration_ms=0.0)
             return
         try:
             loop = asyncio.get_running_loop()
@@ -273,10 +288,12 @@ class RobotBody:
             audio = await loop.run_in_executor(None, lambda: agent.run(text, model_kind="tts"))
             if audio is None:
                 self.face.set_state(speaking="Skipped")
+                await self.channel.emit_event("tts_done", text=text, duration_ms=0.0)
                 return
             audio = np.array(audio, dtype="float32")
             if audio.size == 0:
                 self.face.set_state(speaking="Skipped")
+                await self.channel.emit_event("tts_done", text=text, duration_ms=0.0)
                 return
             max_abs = np.max(np.abs(audio))
             if max_abs > 0:
@@ -289,11 +306,13 @@ class RobotBody:
                 speaking="Idle",
                 event="Ready for next interaction",
             )
+            await self.channel.emit_event("tts_done", text=text, duration_ms=self.last_tts_ms)
         except Exception as exc:
             self.face.set_state(speaking="Error", event=f"TTS failed: {exc}")
             self.face.console_log.log(f"TTS error: {exc}")
             if "preprocessor_config" in str(exc):
                 self.tts_available = False
+            await self.channel.emit_event("tts_done", text=text, duration_ms=0.0, error=str(exc))
 
     async def tts_worker(self, agent):
         while not self.shutdown_event.is_set():
