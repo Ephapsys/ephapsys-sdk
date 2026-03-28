@@ -5,8 +5,6 @@ import os
 import sys
 import time
 import traceback
-import json
-
 import cv2
 import numpy as np
 
@@ -33,10 +31,6 @@ class RobotBrain:
         # It can still be disabled explicitly via env when debugging other paths.
         self.live_vision_enabled = os.getenv("ROBOT_ENABLE_LIVE_VISION", "1").lower() not in ("0", "false", "no")
         self.world_enabled = os.getenv("ROBOT_ENABLE_WORLD_MODEL", "1").lower() not in ("0", "false", "no")
-        self.world_runtime = None
-        self.world_model = None
-        self.world_device = None
-        self.world_image_size = 256
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
@@ -62,50 +56,6 @@ class RobotBrain:
             self.face.console_log.log(f"Startup vision observation fallback: {exc}")
         return vision_label
 
-    def load_world_model(self):
-        if self.world_model is not None or not self.world_runtime:
-            return self.world_model
-        try:
-            import torch
-            from transformers import VJEPA2Model
-        except ImportError as exc:
-            self.face.console_log.log(f"World model unavailable: {exc}")
-            self.world_enabled = False
-            return None
-
-        model_path = self.world_runtime.get("model_path")
-        try:
-            cfg_path = os.path.join(model_path, "config.json")
-            if os.path.exists(cfg_path):
-                data = json.loads(open(cfg_path, "r").read())
-                self.world_image_size = int(data.get("image_size") or self.world_image_size)
-            self.face.console_log.log("[brain] Loading world model: Robot World Model (facebook/vjepa2-vitl-fpc64-256)")
-            model = VJEPA2Model.from_pretrained(model_path)
-            self.agent._apply_ecm_if_available(model, self.world_runtime)
-            self.world_device = self.agent._device()
-            self.world_model = model.to(self.world_device)
-            return self.world_model
-        except Exception as exc:
-            self.face.console_log.log(f"World model load failed: {exc}")
-            self.world_enabled = False
-            return None
-
-    def encode_world_frame(self, frame):
-        model = self.load_world_model()
-        if model is None:
-            return None
-        import torch
-
-        resized = cv2.resize(frame, (self.world_image_size, self.world_image_size), interpolation=cv2.INTER_LINEAR)
-        arr = resized.astype("float32") / 255.0
-        arr = (arr - 0.5) / 0.5
-        tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).unsqueeze(0)
-        tensor = torch.cat([tensor, tensor], dim=1).to(self.world_device)
-        with torch.no_grad():
-            outputs = model(pixel_values_videos=tensor, skip_predictor=True)
-        hidden = outputs.last_hidden_state
-        return hidden.mean(dim=tuple(range(1, hidden.ndim))).detach().cpu().numpy()
-
     def compute_world_summary(self, frame, vision_label):
         movement_phrase = "scene steady"
         motion_score = None
@@ -117,7 +67,10 @@ class RobotBrain:
         world_delta = None
         if self.world_enabled:
             try:
-                current_embedding = self.encode_world_frame(frame)
+                current_embedding = np.asarray(
+                    self.agent.run(Image.fromarray(frame), model_kind="world"),
+                    dtype="float32",
+                )
                 if current_embedding is not None and self.prev_world_embedding is not None:
                     prev = self.prev_world_embedding
                     curr = current_embedding
@@ -218,8 +171,7 @@ class RobotBrain:
         self.face.console_log.log("[brain] Preparing runtime bundles")
         runtimes = await self.run_blocking(self.agent.prepare_runtime)
         self.log_stage("Runtime bundles prepared", t0)
-        self.world_runtime = runtimes.get("world")
-        if self.world_runtime is None:
+        if runtimes.get("world") is None:
             self.world_enabled = False
         tts_path = (runtimes.get("tts") or {}).get("model_path")
         self.body.tts_available = await self.run_blocking(self.body.ensure_preprocessor, tts_path) if tts_path else False
