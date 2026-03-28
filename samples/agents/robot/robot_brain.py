@@ -24,6 +24,10 @@ class RobotBrain:
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
 
+    async def run_blocking(self, fn, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+
     def build_startup_scene_observation(self):
         vision_label = None
         try:
@@ -51,7 +55,7 @@ class RobotBrain:
         )
         try:
             self.face.set_state(event="Verifying agent", reasoning="Checking trusted state")
-            ok, _ = self.agent.verify()
+            ok, _ = await self.run_blocking(self.agent.verify)
         except RuntimeError as exc:
             if "404" in str(exc):
                 self.face.console_live.print(f"[red]❌ Agent template '{self.agent.agent_id}' not found in backend.[/red]")
@@ -60,7 +64,7 @@ class RobotBrain:
             raise
 
         if not ok:
-            status = self.agent.get_status()
+            status = await self.run_blocking(self.agent.get_status)
             is_personalized = status.get("state", {}).get("personalized", False) or status.get("personalized", False)
             if not is_personalized:
                 anchor = os.getenv("PERSONALIZE_ANCHOR")
@@ -68,19 +72,19 @@ class RobotBrain:
                 self.face.console_live.print(
                     f"[yellow]Agent not personalized; running personalize(anchor={anchor})...[/yellow]"
                 )
-                self.agent.personalize(anchor=anchor)
+                await self.run_blocking(self.agent.personalize, anchor=anchor)
                 self.face.console_live.print("[green]✅ Agent personalized (instance registered in AOC).[/green]")
                 for _ in range(5):
-                    ok, _ = self.agent.verify()
+                    ok, _ = await self.run_blocking(self.agent.verify)
                     if ok:
                         break
                     self.face.console_live.print("[yellow]...waiting for agent to become ready...[/yellow]")
-                    time.sleep(1)
+                    await asyncio.sleep(1)
             if not ok:
                 self.face.console_live.print("[red]❌ Agent not ready after personalization.[/red]")
                 sys.exit(1)
 
-        status = self.agent.get_status()
+        status = await self.run_blocking(self.agent.get_status)
         is_enabled = status.get("enabled", False) or (status.get("status", "").lower() == "enabled")
         is_revoked = status.get("state", {}).get("revoked", False)
         self.face.agent_status.update({"verified": ok, "enabled": is_enabled, "revoked": is_revoked})
@@ -91,10 +95,10 @@ class RobotBrain:
         self.face.set_state(event="Preparing runtime bundles", reasoning="Loading secure model runtimes")
         t0 = time.perf_counter()
         self.face.console_log.log("[brain] Preparing runtime bundles")
-        runtimes = self.agent.prepare_runtime()
+        runtimes = await self.run_blocking(self.agent.prepare_runtime)
         self.log_stage("Runtime bundles prepared", t0)
         tts_path = (runtimes.get("tts") or {}).get("model_path")
-        self.body.tts_available = self.body.ensure_preprocessor(tts_path) if tts_path else False
+        self.body.tts_available = await self.run_blocking(self.body.ensure_preprocessor, tts_path) if tts_path else False
         self.face.set_state(
             hearing="Listening on microphone",
             vision="Scanning scene",
@@ -110,7 +114,7 @@ class RobotBrain:
         )
 
         self.face.set_state(event="Observing startup scene", reasoning="Waiting for first interaction")
-        startup_vision = self.build_startup_scene_observation()
+        startup_vision = await self.run_blocking(self.build_startup_scene_observation)
         greeting = "Ready to interact."
         self.face.set_latest("-", startup_vision or "-", greeting)
         if startup_vision:
@@ -133,8 +137,8 @@ class RobotBrain:
         while not self.shutdown_event.is_set():
             await asyncio.sleep(5)
             try:
-                ok, _ = self.agent.verify()
-                status = self.agent.get_status()
+                ok, _ = await self.run_blocking(self.agent.verify)
+                status = await self.run_blocking(self.agent.get_status)
                 is_enabled = status.get("enabled", False) or (status.get("status", "").lower() == "enabled")
                 is_revoked = status.get("state", {}).get("revoked", False)
                 self.face.agent_status.update({"verified": ok, "enabled": is_enabled, "revoked": is_revoked})
@@ -193,7 +197,7 @@ class RobotBrain:
                         )
                         vision_started = time.perf_counter()
                         vision_input = Image.fromarray(latest_camera_frame)
-                        vision_raw = self.agent.run(vision_input, model_kind="vision")
+                        vision_raw = await self.run_blocking(self.agent.run, vision_input, model_kind="vision")
                         vision_ms = (time.perf_counter() - vision_started) * 1000
                         vision_label = str(vision_raw).strip() if vision_raw is not None else None
                         latest_vision_label = vision_label or latest_vision_label
@@ -226,7 +230,7 @@ class RobotBrain:
                 self.face.set_state(hearing="Transcribing speech", event="Processing microphone input")
                 stt_started = time.perf_counter()
                 stt_audio = self.body.audio_to_wav_bytes(mic_audio)
-                text_input = self.agent.run(stt_audio, model_kind="stt")
+                text_input = await self.run_blocking(self.agent.run, stt_audio, model_kind="stt")
                 stt_ms = (time.perf_counter() - stt_started) * 1000
                 self.face.set_state(hearing=self.face.clip_text(text_input or heard_summary or "No speech detected", 64))
 
@@ -235,7 +239,7 @@ class RobotBrain:
                     self.face.set_state(vision="Analyzing scene", event="Running vision model")
                     vision_started = time.perf_counter()
                     vision_input = Image.fromarray(latest_camera_frame)
-                    vision_raw = self.agent.run(vision_input, model_kind="vision")
+                    vision_raw = await self.run_blocking(self.agent.run, vision_input, model_kind="vision")
                     vision_ms = (time.perf_counter() - vision_started) * 1000
                     vision_label = str(vision_raw).strip() if vision_raw is not None else None
                     latest_vision_label = vision_label or latest_vision_label
@@ -244,13 +248,15 @@ class RobotBrain:
                 context = f"(vision={vision_label})" if vision_label else ""
                 self.face.set_state(reasoning="Composing response", event="Running language model")
                 language_started = time.perf_counter()
-                response_text = str(self.agent.run(f"{text_input} {context}", model_kind="language")).strip()
+                response_text = str(
+                    await self.run_blocking(self.agent.run, f"{text_input} {context}", model_kind="language")
+                ).strip()
                 language_ms = (time.perf_counter() - language_started) * 1000
                 self.face.set_state(reasoning=self.face.clip_text(response_text or "No response generated", 64))
 
                 self.face.set_state(event="Updating memory")
                 embedding_started = time.perf_counter()
-                embedding_out = self.agent.run(response_text, model_kind="embedding")
+                embedding_out = await self.run_blocking(self.agent.run, response_text, model_kind="embedding")
                 embedding_ms = (time.perf_counter() - embedding_started) * 1000
                 vec = np.array(embedding_out, dtype="float32").reshape(1, -1)
                 if vec.size == 0:
