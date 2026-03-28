@@ -19,6 +19,8 @@ class RobotBrain:
         self.agent = TrustedAgent.from_env()
         self.stored_responses = []
         self.startup_vision_label = "-"
+        self.language_warm_task = None
+        self.language_warm_done = False
         # Live per-turn vision is disabled for now to keep the sample stable.
         # Startup vision still runs for the initial greeting/scene impression.
         self.live_vision_enabled = False
@@ -51,6 +53,18 @@ class RobotBrain:
         if vision_label and vision_label.strip() and vision_label.strip().lower() != "no objects detected":
             return f"Hello. I can see {vision_label}. I'm ready when you are."
         return "Hello. I'm ready when you are."
+
+    async def warm_language_runtime(self):
+        if self.language_warm_done:
+            return
+        started = time.perf_counter()
+        try:
+            self.face.console_log.log("[brain] Warming language model: Robot Language Model")
+            await self.run_blocking(self.agent.run, "Hello.", model_kind="language")
+            self.log_stage("Language model warmup ready", started)
+            self.language_warm_done = True
+        except Exception as exc:
+            self.face.console_log.log(f"Language warmup skipped: {exc}")
 
     async def startup(self):
         self.face.startup()
@@ -145,6 +159,8 @@ class RobotBrain:
                 finally:
                     self.channel.event_done()
         self.body.speech_enabled = True
+        if self.language_warm_task is None:
+            self.language_warm_task = asyncio.create_task(self.warm_language_runtime())
 
         self.face.set_state(
             hearing="Listening on microphone",
@@ -306,11 +322,21 @@ class RobotBrain:
                     self.face.set_state(vision=self.face.clip_text(vision_label or "No scene update", 64))
 
                 context = f"(vision={vision_label})" if vision_label else ""
-                self.face.set_state(reasoning="Composing response", event="Running language model")
+                self.face.set_latest(text_input, vision_label or "-", "Thinking...")
+                self.face.set_state(
+                    reasoning="Composing response",
+                    event="Running language model",
+                    speaking="Thinking",
+                )
+                if self.language_warm_task is not None and not self.language_warm_task.done():
+                    self.face.set_state(event="Waiting for language model warmup")
+                    await self.language_warm_task
+                    self.language_warm_done = True
                 language_started = time.perf_counter()
-                response_text = str(
-                    await self.run_blocking(self.agent.run, f"{text_input} {context}", model_kind="language")
-                ).strip()
+                response_text = str(await asyncio.wait_for(
+                    self.run_blocking(self.agent.run, f"{text_input} {context}", model_kind="language"),
+                    timeout=float(os.getenv("ROBOT_LANGUAGE_TIMEOUT_S", "45")),
+                )).strip()
                 language_ms = (time.perf_counter() - language_started) * 1000
                 self.face.set_state(reasoning=self.face.clip_text(response_text or "No response generated", 64))
 
