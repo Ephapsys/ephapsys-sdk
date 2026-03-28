@@ -27,6 +27,8 @@ class RobotFaceBase:
             "hearing": "Stand by",
             "vision": "Stand by",
             "world": "Stand by",
+            "expression": "neutral",
+            "gaze": "center",
             "body": "Stand by",
             "tools": "Idle",
             "governor": "Ready",
@@ -202,6 +204,10 @@ class RobotFace(RobotFaceBase):
         state.append(f"{self.inline_text(self.ui_state['vision'], status_width)}\n")
         state.append("World     ", style="bold bright_green")
         state.append(f"{self.inline_text(self.ui_state['world'], status_width)}\n")
+        state.append("Expression", style="bold magenta")
+        state.append(f" {self.inline_text(self.ui_state['expression'], status_width - 1)}\n")
+        state.append("Gaze      ", style="bold blue")
+        state.append(f"{self.inline_text(self.ui_state['gaze'], status_width)}\n")
         state.append("Body      ", style="bold blue")
         state.append(f"{self.inline_text(self.ui_state['body'], status_width)}\n")
         state.append("Tools     ", style="bold white")
@@ -285,6 +291,8 @@ class RobotFace(RobotFaceBase):
             self.format_status(),
             self.ui_state["hearing"],
             self.ui_state["vision"],
+            self.ui_state["expression"],
+            self.ui_state["gaze"],
             self.ui_state["reasoning"],
             self.ui_state["speaking"],
             self.ui_state["memory"],

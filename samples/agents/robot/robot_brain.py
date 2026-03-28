@@ -10,7 +10,14 @@ import numpy as np
 
 from PIL import Image
 from ephapsys.agent import TrustedAgent
-from robot_arch import RobotGovernor, RobotIntent, RobotToolbox, body_intent_for_world, classify_tool_intent
+from robot_arch import (
+    RobotGovernor,
+    RobotIntent,
+    RobotToolbox,
+    body_intent_for_world,
+    classify_tool_intent,
+    face_intent_for_state,
+)
 from robot_state import RobotStateStore
 
 
@@ -67,7 +74,36 @@ class RobotBrain:
         await self.reasoning_queue.put({"kind": kind, "payload": payload})
 
     async def emit_output_event(self, kind: str, **payload):
+        if kind in {"body_control", "face_control"}:
+            self._coalesce_output_kind(kind)
         await self.output_queue.put({"kind": kind, "payload": payload})
+
+    def _coalesce_output_kind(self, kind: str):
+        queue_items = list(self.output_queue._queue)
+        filtered = [item for item in queue_items if item.get("kind") != kind]
+        if len(filtered) == len(queue_items):
+            return
+        self.output_queue._queue.clear()
+        self.output_queue._queue.extend(filtered)
+
+    async def emit_face_intent(self, *, world_summary: str = "", reasoning: str = "", speaking: str = "", event: str = ""):
+        intent = face_intent_for_state(
+            world_summary=world_summary,
+            reasoning=reasoning,
+            speaking=speaking,
+            event=event,
+        )
+        decision = self.governor.approve(intent)
+        self.set_governor_state(decision)
+        if not decision.allowed:
+            return
+        self.state.latest_expression = str(intent.payload.get("expression", "neutral"))
+        self.state.latest_gaze = str(intent.payload.get("gaze", "center"))
+        await self.emit_output_event(
+            "face_control",
+            expression=self.state.latest_expression,
+            gaze=self.state.latest_gaze,
+        )
 
     def log_stage(self, label: str, started_at: float):
         self.face.console_log.log(f"[brain] {label} in {(time.perf_counter() - started_at):.2f}s")
@@ -161,6 +197,8 @@ class RobotBrain:
             hearing="Stand by",
             vision="Stand by",
             reasoning="Verifying agent",
+            expression=self.state.latest_expression,
+            gaze=self.state.latest_gaze,
             body="Idle",
             tools="Idle",
             governor="Ready",
@@ -219,6 +257,8 @@ class RobotBrain:
             hearing="Listening on microphone",
             vision="Scanning scene",
             world="Scanning scene dynamics",
+            expression="warm",
+            gaze="engage",
             body="Idle",
             tools="Idle",
             governor="Ready",
@@ -259,6 +299,12 @@ class RobotBrain:
         if self.body.tts_available:
             self.body.speech_enabled = False
             self.face.set_state(reasoning="Greeting ready", speaking="Queued for startup greeting", event="Greeting")
+            await self.emit_face_intent(
+                world_summary=self.state.latest_world_summary,
+                reasoning="Greeting ready",
+                speaking="Queued for startup greeting",
+                event="Greeting",
+            )
             await self.channel.send_command("speak", text=greeting)
             while not self.shutdown_event.is_set():
                 event = await self.channel.next_event(timeout=0.25)
@@ -277,6 +323,8 @@ class RobotBrain:
             hearing="Listening on microphone",
             vision="Scanning scene",
             world=self.face.clip_text(self.state.latest_world_summary or "Scanning scene dynamics", 64),
+            expression="neutral",
+            gaze="center",
             body="Idle",
             tools="Idle",
             reasoning="Waiting for speech",
@@ -329,9 +377,20 @@ class RobotBrain:
                     self.state.awaiting_tts_done = True
                     self.body.speech_enabled = False
                     self.face.set_state(speaking="Queued for playback", event="Reply ready")
+                    await self.emit_face_intent(
+                        world_summary=self.state.latest_world_summary,
+                        reasoning=self.face.ui_state.get("reasoning", ""),
+                        speaking="Queued for playback",
+                        event="Reply ready",
+                    )
                     await self.channel.send_command("speak", text=payload.get("text", ""))
                 elif kind == "body_control":
                     await self.channel.send_command("body_control", action=payload.get("action", "idle"))
+                elif kind == "face_control":
+                    self.face.set_state(
+                        expression=payload.get("expression", self.state.latest_expression),
+                        gaze=payload.get("gaze", self.state.latest_gaze),
+                    )
             finally:
                 self.output_queue.task_done()
 
@@ -440,6 +499,8 @@ class RobotBrain:
                     self.state.awaiting_tts_done = False
                     self.body.speech_enabled = True
                     self.face.set_state(
+                        expression="neutral",
+                        gaze="center",
                         body=self.face.ui_state.get("body", "Idle"),
                         tools="Idle",
                         speaking="Idle" if self.body.tts_available else "Unavailable",
@@ -467,6 +528,12 @@ class RobotBrain:
                         action = intent.payload.get("action", "idle")
                         self.face.set_state(body=str(action))
                         await self.emit_output_event("body_control", action=action)
+                    await self.emit_face_intent(
+                        world_summary=latest_world_summary,
+                        reasoning=self.face.ui_state.get("reasoning", "Waiting for speech"),
+                        speaking=self.face.ui_state.get("speaking", "Idle"),
+                        event="Speaking reply" if self.state.awaiting_tts_done else "Waiting for speech",
+                    )
                     self.face.set_state(
                         vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                         world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
@@ -512,6 +579,12 @@ class RobotBrain:
 
                 text_input = event_payload.get("transcript") or "No speech detected"
                 self.face.set_state(hearing=text_input)
+                await self.emit_face_intent(
+                    world_summary=latest_world_summary,
+                    reasoning="Processing speech",
+                    speaking=self.face.ui_state.get("speaking", "Idle"),
+                    event="Processing microphone input",
+                )
                 if live is not None:
                     panel = self.face.render_status(
                         text_input,
@@ -554,6 +627,12 @@ class RobotBrain:
                         action = intent.payload.get("action", "idle")
                         self.face.set_state(body=str(action))
                         await self.emit_output_event("body_control", action=action)
+                    await self.emit_face_intent(
+                        world_summary=latest_world_summary,
+                        reasoning=self.face.ui_state.get("reasoning", "Waiting for speech"),
+                        speaking=self.face.ui_state.get("speaking", "Idle"),
+                        event="Running vision model",
+                    )
                     self.face.set_state(
                         vision=self.face.clip_text(latest_vision_label or "No scene update", 64),
                         world=self.face.clip_text(latest_world_summary or "Scene clear", 64),
@@ -583,6 +662,12 @@ class RobotBrain:
                         event="Running language model",
                         speaking="Thinking",
                     )
+                    await self.emit_face_intent(
+                        world_summary=latest_world_summary,
+                        reasoning="Composing response",
+                        speaking="Thinking",
+                        event="Running language model",
+                    )
                     if self.language_warm_task is not None and not self.language_warm_task.done():
                         self.face.set_state(event="Waiting for language model warmup")
                         await self.language_warm_task
@@ -594,6 +679,12 @@ class RobotBrain:
                     )).strip()
                     language_ms = (time.perf_counter() - language_started) * 1000
                     self.face.set_state(reasoning=self.face.clip_text(response_text or "No response generated", 64))
+                    await self.emit_face_intent(
+                        world_summary=latest_world_summary,
+                        reasoning=response_text or "No response generated",
+                        speaking="Queued for playback" if self.body.tts_available else "Idle",
+                        event="Reply ready",
+                    )
 
                 self.face.set_state(event="Updating memory")
                 # Disabled for the live sample path for now: FAISS-based semantic memory
@@ -664,6 +755,12 @@ class RobotBrain:
             except Exception as exc:
                 detail = str(exc).strip() or exc.__class__.__name__
                 self.face.set_state(event=f"Processing error: {detail}", reasoning="Error")
+                await self.emit_face_intent(
+                    world_summary=self.face.latest.get("world", "-"),
+                    reasoning="Error",
+                    speaking="Idle",
+                    event=f"Processing error: {detail}",
+                )
                 self.face.set_latest(
                     hearing=self.face.latest.get("hearing", "-"),
                     vision=self.face.latest.get("vision", "-"),

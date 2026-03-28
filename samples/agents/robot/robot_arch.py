@@ -26,6 +26,8 @@ class RobotGovernor:
         self.allow_tools = allow_tools
 
     def approve(self, intent: RobotIntent) -> GovernorDecision:
+        if intent.kind == "face_control":
+            return GovernorDecision(True, "Face control allowed")
         if intent.kind == "body_control":
             if self.allow_body_control:
                 return GovernorDecision(True, "Body control allowed")
@@ -71,3 +73,42 @@ def body_intent_for_world(world_summary: str) -> RobotIntent:
     if "movement detected" in summary:
         return RobotIntent(kind="body_control", source="world", payload={"action": "orient_to_motion"})
     return RobotIntent(kind="body_control", source="world", payload={"action": "scan_scene"})
+
+
+def face_intent_for_state(*, world_summary: str = "", reasoning: str = "", speaking: str = "", event: str = "") -> RobotIntent:
+    world = (world_summary or "").lower()
+    reasoning_text = (reasoning or "").lower()
+    speaking_text = (speaking or "").lower()
+    event_text = (event or "").lower()
+
+    expression = "neutral"
+    gaze = "center"
+
+    if "greeting" in event_text:
+        expression = "warm"
+        gaze = "engage"
+    elif "thinking" in speaking_text or "composing" in reasoning_text or "running language" in event_text:
+        expression = "thinking"
+        gaze = "steady"
+    elif "transcribing" in reasoning_text or "processing microphone" in event_text:
+        expression = "listening_focus"
+        gaze = "attentive"
+    elif "speaking" in event_text or "synthesizing" in speaking_text or "queued" in speaking_text:
+        expression = "speaking"
+        gaze = "engage"
+    elif "person moving" in world:
+        expression = "attentive"
+        gaze = "track_person"
+    elif "person present" in world:
+        expression = "attentive"
+        gaze = "look_at_person"
+    elif "movement detected" in world:
+        expression = "alert"
+        gaze = "orient_to_motion"
+
+    return RobotIntent(
+        kind="face_control",
+        source="brain",
+        payload={"expression": expression, "gaze": gaze},
+        priority=1,
+    )

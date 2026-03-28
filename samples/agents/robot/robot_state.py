@@ -11,6 +11,8 @@ class RobotStateStore:
     latest_scene_summary: str = "-"
     latest_camera_frame: Optional[object] = None
     prev_world_embedding: Optional[object] = None
+    latest_expression: str = "neutral"
+    latest_gaze: str = "center"
     stored_responses: List[str] = field(default_factory=list)
     language_warm_done: bool = False
     awaiting_tts_done: bool = False
