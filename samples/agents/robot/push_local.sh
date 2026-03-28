@@ -4,19 +4,21 @@ set -euo pipefail
 # =====================================================================
 # push.sh
 # - Registers baseline model templates (via CLI login)
-# - Optionally modulates them (default) OR skips modulation with --idempotent
+# - Defaults to idempotent publish; use --no-idempotent for full modulation
 # - Creates an agent template bundling the model templates
 # =====================================================================
 
-USAGE="Usage: $0 [--idempotent] [--label \"Robot Agent Template\"]"
+USAGE="Usage: $0 [--idempotent|--no-idempotent] [--label \"Robot Agent Template\"]"
 POLL_INTERVAL_SEC=5
 POLL_TIMEOUT_SEC=7200
+CLI_TOKEN_FILE=".cli_token"
 
-IDEMPOTENT=0
+IDEMPOTENT=1
 LABEL=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --idempotent) IDEMPOTENT=1; shift ;;
+    --no-idempotent) IDEMPOTENT=0; shift ;;
     --label) LABEL="$2"; shift 2 ;;
     -h|--help) echo "$USAGE"; exit 0 ;;
     *) echo "Unknown arg: $1"; echo "$USAGE"; exit 1 ;;
@@ -28,76 +30,128 @@ done
 # ---------------------------------------------------------------------
 [[ -f .env ]] && set -o allexport && source .env && set +o allexport
 
-AOC_API="${AOC_API:-${BASE_URL:-http://localhost:7001}}"
-CLI_API="${AOC_API}/cli"
-TOKEN_FILE=".cli_token"
+BASE_URL="${AOC_BASE_URL:-${AOC_API_URL:-${AOC_API:-${BASE_URL:-http://localhost:7001}}}}"
+CLI_API="${BASE_URL}/cli"
 SESSION_FILE="${HOME}/.ephapsys_state/session.json"
 API_TOKEN="${API_TOKEN:-${AOC_MODULATION_TOKEN:-}}"
 HF_TOKEN="${HF_TOKEN:-""}"
+ROBOT_TTS_REPO="${ROBOT_TTS_REPO:-microsoft/speecht5_tts}"
+ROBOT_TTS_NAME="${ROBOT_TTS_NAME:-Robot TTS Model}"
+ROBOT_VOCODER_REPO="${ROBOT_VOCODER_REPO:-microsoft/speecht5_hifigan}"
+ROBOT_VOCODER_NAME="${ROBOT_VOCODER_NAME:-Robot Vocoder Model}"
+ROBOT_STT_REPO="${ROBOT_STT_REPO:-openai/whisper-tiny.en}"
+ROBOT_STT_NAME="${ROBOT_STT_NAME:-Robot STT Model}"
+ROBOT_LANGUAGE_REPO="${ROBOT_LANGUAGE_REPO:-Qwen/Qwen3.5-0.8B}"
+ROBOT_LANGUAGE_NAME="${ROBOT_LANGUAGE_NAME:-Robot Language Model}"
+ROBOT_EMBEDDING_REPO="${ROBOT_EMBEDDING_REPO:-sentence-transformers/all-MiniLM-L6-v2}"
+ROBOT_EMBEDDING_NAME="${ROBOT_EMBEDDING_NAME:-Robot Embedding Model}"
+ROBOT_VISION_REPO="${ROBOT_VISION_REPO:-hustvl/yolos-base}"
+ROBOT_VISION_NAME="${ROBOT_VISION_NAME:-Robot Vision Model}"
+ROBOT_WORLD_REPO="${ROBOT_WORLD_REPO:-facebook/vjepa2-vitl-fpc64-256}"
+ROBOT_WORLD_NAME="${ROBOT_WORLD_NAME:-Robot World Model}"
+ROBOT_ENABLE_WORLD_MODEL="${ROBOT_ENABLE_WORLD_MODEL:-0}"
+
+MODEL_SPEC_JSON="$(jq -n \
+  --arg tts_repo "$ROBOT_TTS_REPO" --arg tts_name "$ROBOT_TTS_NAME" \
+  --arg voc_repo "$ROBOT_VOCODER_REPO" --arg voc_name "$ROBOT_VOCODER_NAME" \
+  --arg stt_repo "$ROBOT_STT_REPO" --arg stt_name "$ROBOT_STT_NAME" \
+  --arg lang_repo "$ROBOT_LANGUAGE_REPO" --arg lang_name "$ROBOT_LANGUAGE_NAME" \
+  --arg emb_repo "$ROBOT_EMBEDDING_REPO" --arg emb_name "$ROBOT_EMBEDDING_NAME" \
+  --arg vis_repo "$ROBOT_VISION_REPO" --arg vis_name "$ROBOT_VISION_NAME" \
+  --arg world_repo "$ROBOT_WORLD_REPO" --arg world_name "$ROBOT_WORLD_NAME" \
+  --arg world_enabled "$ROBOT_ENABLE_WORLD_MODEL" '
+  ([
+    {kind:"tts", repo:$tts_repo, name:$tts_name},
+    {kind:"vocoder", repo:$voc_repo, name:$voc_name},
+    {kind:"stt", repo:$stt_repo, name:$stt_name},
+    {kind:"language", repo:$lang_repo, name:$lang_name},
+    {kind:"embedding", repo:$emb_repo, name:$emb_name},
+    {kind:"vision", repo:$vis_repo, name:$vis_name}
+  ] + (if ($world_enabled | ascii_downcase) == "1" or ($world_enabled | ascii_downcase) == "true" or ($world_enabled | ascii_downcase) == "yes"
+       then [{kind:"world", repo:$world_repo, name:$world_name}]
+       else []
+       end))'
+)"
+
+info() {
+  printf '[INFO] %s\n' "$*"
+}
+
+warn() {
+  printf '[WARN] %s\n' "$*" >&2
+}
+
+error() {
+  printf '[ERROR] %s\n' "$*" >&2
+}
 
 if [[ -z "$API_TOKEN" ]]; then
-  echo "[FATAL] API_TOKEN is required to create agent templates. Set API_TOKEN or AOC_MODULATION_TOKEN in .env or environment."
+  error "API_TOKEN is required to create agent templates. Set API_TOKEN or AOC_MODULATION_TOKEN in .env or environment."
   exit 1
 fi
 
 # ---------------------------------------------------------------------
 # CLI login (reuse ephapsys login session or cached token if valid)
 # ---------------------------------------------------------------------
-TOKEN=""
-TOKEN_SOURCE=""
-
-# Prefer token from ephapsys CLI session (~/.ephapsys_state/session.json)
-if [[ -f "$SESSION_FILE" ]]; then
-  TOKEN=$(jq -r '.token // empty' "$SESSION_FILE" 2>/dev/null || true)
-  if [[ -n "$TOKEN" ]]; then
-    VALID=$(curl -s -o /dev/null -w "%{http_code}" \
-      -H "Authorization: Bearer $TOKEN" \
-      "$CLI_API/models/list")
-    if [[ "$VALID" == "200" ]]; then
-      TOKEN_SOURCE="session"
-      echo "[INFO] Using CLI token from ephapsys login ($SESSION_FILE)"
-    else
-      echo "[WARN] Session token invalid/expired. Will fall back."
-      TOKEN=""
+cli_login() {
+  local token=""
+  local session_base_url=""
+  if [[ -f "$SESSION_FILE" ]]; then
+    token=$(jq -r '.token // empty' "$SESSION_FILE" 2>/dev/null || true)
+    session_base_url=$(jq -r '.base_url // empty' "$SESSION_FILE" 2>/dev/null || true)
+    if [[ -n "$token" ]]; then
+      local code
+      code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" "$CLI_API/models/list")
+      if [[ "$code" == "200" ]]; then
+        info "Reusing CLI session from ~/.ephapsys_state/session.json" >&2
+        printf '%s' "$token"
+        return
+      fi
+      if [[ -n "$session_base_url" && "$session_base_url" != "$BASE_URL" ]]; then
+        warn "Saved CLI session targets $session_base_url but push.sh is targeting $BASE_URL" >&2
+      fi
     fi
   fi
-fi
-
-# Fall back to local .cli_token cache
-if [[ -z "$TOKEN" && -f "$TOKEN_FILE" ]]; then
-  TOKEN=$(cat "$TOKEN_FILE")
-  VALID=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer $TOKEN" \
-    "$CLI_API/models/list")
-  if [[ "$VALID" == "200" ]]; then
-    TOKEN_SOURCE="cache"
-    echo "[INFO] Using cached CLI token from $TOKEN_FILE"
-  else
-    echo "[WARN] Cached token invalid/expired. Re-login required."
-    TOKEN=""
-    rm -f "$TOKEN_FILE"
+  if [[ -f "$CLI_TOKEN_FILE" ]]; then
+    token=$(cat "$CLI_TOKEN_FILE")
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" "$CLI_API/models/list")
+    if [[ "$code" == "200" ]]; then
+      info "Reusing cached CLI token from .cli_token" >&2
+      printf '%s' "$token"
+      return
+    fi
   fi
-fi
 
-if [[ -z "$TOKEN" ]]; then
-  read -p "Enter CLI username (email): " CLI_USER
-  read -s -p "Enter CLI password: " CLI_PASS
-  echo
-  echo "[INFO] Logging in as $CLI_USER ..."
-  LOGIN_RESP=$(curl -s -X POST "$CLI_API/login" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\": \"${CLI_USER}\", \"password\": \"${CLI_PASS}\"}")
-  TOKEN=$(echo "$LOGIN_RESP" | jq -r '.token')
-  if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
-    echo "[ERROR] Failed to get CLI token. Wrong credentials?"
+  if [[ ! -t 0 ]]; then
+    error "No valid CLI session found for model registration. Run 'ephapsys login' first, then rerun push.sh."
     exit 1
   fi
-  echo "$TOKEN" > "$TOKEN_FILE"
+
+  warn "No reusable CLI session found for ${BASE_URL}; falling back to interactive CLI login." >&2
+
+  local cli_user cli_pass login_resp
+  read -r -p "Enter CLI username (email): " cli_user
+  read -r -s -p "Enter CLI password: " cli_pass
+  printf '\n'
+  login_resp=$(curl -sS -X POST "$CLI_API/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"${cli_user}\",\"password\":\"${cli_pass}\"}")
+  token=$(echo "$login_resp" | jq -r '.token // empty')
+  if [[ -z "$token" ]]; then
+    error "CLI login failed"
+    echo "$login_resp" >&2
+    exit 1
+  fi
+  printf '%s' "$token" >"$CLI_TOKEN_FILE"
   mkdir -p "$(dirname "$SESSION_FILE")"
-  echo "$LOGIN_RESP" > "$SESSION_FILE"
-  echo "[INFO] Saved token to $TOKEN_FILE"
-  echo "[INFO] Saved session to $SESSION_FILE (reused by ephapsys CLI)"
-fi
+  jq -n --arg token "$token" --arg base_url "$BASE_URL" --argjson raw "$login_resp" '
+    ($raw | if type == "object" then . else {} end) + {token: $token, base_url: $base_url}
+  ' >"$SESSION_FILE"
+  printf '%s' "$token"
+}
+
+TOKEN="$(cli_login)"
 
 AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
 CLI_HEADER=(-H "Authorization: Bearer ${TOKEN}")
@@ -109,7 +163,7 @@ fetch_templates() {
   local items
   items=$(echo "$resp" | jq -r '.items // empty')
   if [[ -z "$items" ]]; then
-    resp=$(curl -sS "${AUTH_HEADER[@]}" "${AOC_API}/models?type=TEMPLATE") || resp=""
+    resp=$(curl -sS "${AUTH_HEADER[@]}" "${BASE_URL}/models?type=TEMPLATE") || resp=""
   fi
   echo "$resp"
 }
@@ -118,10 +172,13 @@ fetch_templates() {
 # Register baseline model templates
 # ---------------------------------------------------------------------
 register_model () {
-  local PROVIDER=$1 ID=$2 KIND=$3 PROVIDER_TOKEN=$4
+  local PROVIDER=$1 ID=$2 KIND=$3 MODEL_NAME=$4 PROVIDER_TOKEN=$5
+  local response=""
+  local http_code=""
+  local body=""
   echo "------------------------------------------------------------"
-  echo "[INFO] Registering model: $ID (kind=$KIND, provider=$PROVIDER)"
-  RESPONSE=$(curl -s -X POST "$CLI_API/models/register" \
+  echo "[INFO] Registering model: $ID (kind=$KIND, name=$MODEL_NAME, provider=$PROVIDER)"
+  response=$(curl -sS -w $'\n%{http_code}' -X POST "$CLI_API/models/register" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
@@ -129,47 +186,79 @@ register_model () {
       \"provider_token\": \"$PROVIDER_TOKEN\",
       \"ids\": [\"$ID\"],
       \"repo_id\": \"$ID\",
+      \"name\": \"$MODEL_NAME\",
       \"revision\": \"main\",
       \"auto_register\": true,
       \"model_kind\": \"$KIND\"
-    }")
-  if [[ -n "$PROVIDER_TOKEN" ]]; then
-    echo "$RESPONSE" | sed "s/${PROVIDER_TOKEN}/********/g" | jq .
+    }") || {
+      error "Model registration request failed for $ID"
+      return 1
+    }
+  http_code="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
+    error "Model registration failed for $ID (HTTP $http_code)"
+    if [[ -n "$PROVIDER_TOKEN" ]]; then
+      printf '%s\n' "$body" | sed "s/${PROVIDER_TOKEN}/********/g" >&2
+    else
+      printf '%s\n' "$body" >&2
+    fi
+    return 1
+  fi
+  local inserted_count skipped_count model_id
+  inserted_count=$(printf '%s\n' "$body" | jq -r '(.inserted // []) | length' 2>/dev/null || printf '0')
+  skipped_count=$(printf '%s\n' "$body" | jq -r '(.skipped // []) | length' 2>/dev/null || printf '0')
+  model_id=$(printf '%s\n' "$body" | jq -r '(.inserted // [])[0].model.public_id // (.inserted // [])[0].model._id // empty' 2>/dev/null || true)
+  if [[ -n "$model_id" ]]; then
+    info "Model registration request accepted for $ID -> ${model_id} (inserted=${inserted_count}, skipped=${skipped_count})."
   else
-    echo "$RESPONSE" | jq .
+    info "Model registration request accepted for $ID (inserted=${inserted_count}, skipped=${skipped_count})."
   fi
 }
 
 echo "============================================================"
 echo "[STEP] Register baseline model templates"
 echo "============================================================"
-register_model "huggingface" "microsoft/speecht5_tts" "TTS" "$HF_TOKEN"
-register_model "huggingface" "microsoft/speecht5_hifigan" "vocoder" "$HF_TOKEN"
-register_model "huggingface" "openai/whisper-tiny.en" "STT" "$HF_TOKEN"
-register_model "huggingface" "Qwen/Qwen3.5-0.8B" "Language" "$HF_TOKEN"
-register_model "huggingface" "google/embeddinggemma-300m" "Embedding" "$HF_TOKEN"
-register_model "huggingface" "hustvl/yolos-base" "Vision" "$HF_TOKEN"
+info "First-time registration can pause for several minutes per model while AOC downloads upstream Hugging Face assets."
+while IFS=$'\t' read -r kind repo name; do
+  existing="$(fetch_templates | jq -r --arg kind "$kind" --arg repo "$repo" --arg name "$name" '
+    (.items // .models // [])
+    | map(select(
+        ((.kind // .model_kind // "" | ascii_downcase)==($kind|ascii_downcase))
+        and (((.source_repo // .repo_id // "") == $repo) or ((.name // "") == $name))
+      ))
+    | sort_by(.created_at) | last | (.ID // ._id // empty // "")'
+  )"
+  if [[ -n "$existing" ]]; then
+    info "Reusing existing ${kind} template: ${existing} (${name})"
+    continue
+  fi
+  info "No existing ${kind} template matched ${name}; registering ${repo}. Waiting on AOC until registration returns."
+  register_model "huggingface" "$repo" "$kind" "$name" "$HF_TOKEN"
+done < <(echo "$MODEL_SPEC_JSON" | jq -r '.[] | [.kind, .repo, .name] | @tsv')
 
 # ---------------------------------------------------------------------
 # Resolve latest model template IDs
 # ---------------------------------------------------------------------
 resolve_template() {
   local kind="$1"
+  local repo="$2"
+  local name="$3"
   local match
-  match=$(fetch_templates \
-    | jq -r --arg kind "$kind" '
+  match=$(fetch_templates | jq -r --arg kind "$kind" --arg repo "$repo" --arg name "$name" '
         (.items // .models // [])
-        | map(select((.kind // .model_kind // "" | ascii_downcase)==($kind|ascii_downcase)))
+        | map(select(
+            ((.kind // .model_kind // "" | ascii_downcase)==($kind|ascii_downcase))
+            and (((.source_repo // .repo_id // "") == $repo) or ((.name // "") == $name))
+          ))
         | sort_by(.created_at) | last | (.ID // ._id // empty // "")')
   if [[ -n "$match" ]]; then
     echo "$match"
     return
   fi
-  # Fallback: try to match by repo/name when kind is missing (e.g., legacy vocoder)
-  match=$(fetch_templates \
-    | jq -r --arg kind "$kind" '
+  match=$(fetch_templates | jq -r --arg repo "$repo" --arg name "$name" '
         (.items // .models // [])
-        | map(select(.name // "" | test($kind; "i")))
+        | map(select(((.source_repo // .repo_id // "") == $repo) or ((.name // "") == $name)))
         | sort_by(.created_at) | last | (.ID // ._id // empty // "")')
   echo "$match"
 }
@@ -177,20 +266,31 @@ resolve_template() {
 ensure_model_kind() {
   local mid="$1" kind="$2"
   [[ -z "$mid" || -z "$kind" ]] && return
-  doc=$(curl -s -H "Authorization: Bearer ${API_TOKEN}" "${AOC_API}/models/${mid}" || echo "")
+  doc=$(curl -s -H "Authorization: Bearer ${API_TOKEN}" "${BASE_URL}/models/${mid}" || echo "")
   current=$(echo "$doc" | jq -r '.kind // .model_kind // ""')
   if [[ -z "$current" || "$current" == "unknown" || "$current" == "null" ]]; then
     echo "[INFO] Patching model_kind for ${mid} -> ${kind}"
-    curl -s -X PATCH "${AOC_API}/models/${mid}" \
+    curl -s -X PATCH "${BASE_URL}/models/${mid}" \
       -H "Authorization: Bearer ${API_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "{\"model_kind\":\"${kind}\"}" >/dev/null || true
   fi
 }
 
-MODEL_KINDS=("tts" "vocoder" "stt" "language" "embedding" "vision")
 MODEL_IDS=()
 VOCODER_ID=""
+save_env_var() {
+  local key="$1"
+  local value="$2"
+  if [[ ! -f ".env" ]]; then
+    return
+  fi
+  if grep -q "^${key}=" .env; then
+    sed -i '' "s|^${key}=.*|${key}=${value}|" .env 2>/dev/null || sed -i "s|^${key}=.*|${key}=${value}|" .env
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> .env
+  fi
+}
 
 # ---------------------------------------------------------------------
 # List available templates (parity with previous scripts)
@@ -226,7 +326,7 @@ poll_until_done() {
       echo "[WARN] Timeout waiting for $model_id"
       return 1
     fi
-    body=$(curl -sS "${AUTH_HEADER[@]}" "$AOC_API/models/$model_id")
+    body=$(curl -sS "${AUTH_HEADER[@]}" "$BASE_URL/models/$model_id")
     status=$(echo "$body" | jq -r '(.Modulation.status // "")')
     finished=$(echo "$body" | jq -r '(.Modulation.finished_at // "")')
     if [[ "$status" == "completed" || "$finished" != "null" ]]; then
@@ -238,20 +338,23 @@ poll_until_done() {
 }
 
 # ---------------------------------------------------------------------
-# Optional modulation (skipped when --idempotent)
+# Optional modulation (skipped when idempotent publish is enabled)
 # ---------------------------------------------------------------------
 run_modulator() {
   local kind="$1" path="$2"
   if [[ $IDEMPOTENT -eq 1 ]]; then
     echo "[SKIP] Idempotent mode: bypass modulation for ${kind}"
     local mid
-    mid="$(resolve_template "$kind")"
+    local repo name
+    repo=$(echo "$MODEL_SPEC_JSON" | jq -r --arg kind "$kind" '.[] | select(.kind == $kind) | .repo')
+    name=$(echo "$MODEL_SPEC_JSON" | jq -r --arg kind "$kind" '.[] | select(.kind == $kind) | .name')
+    mid="$(resolve_template "$kind" "$repo" "$name")"
     if [[ -z "$mid" ]]; then
       echo "[WARN] No template found for ${kind}; skipping idempotent publish."
       return 1
     fi
     echo "[INFO] Triggering idempotent publish for ${kind} (template=${mid})"
-    curl -s -X POST "${AOC_API}/modulation/start" \
+    curl -s -X POST "${BASE_URL}/modulation/start" \
       -H "Authorization: Bearer ${API_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "{
@@ -268,13 +371,16 @@ run_modulator() {
     return 1
   fi
   local mid
-  mid="$(resolve_template "$kind")"
+  local repo name
+  repo=$(echo "$MODEL_SPEC_JSON" | jq -r --arg kind "$kind" '.[] | select(.kind == $kind) | .repo')
+  name=$(echo "$MODEL_SPEC_JSON" | jq -r --arg kind "$kind" '.[] | select(.kind == $kind) | .name')
+  mid="$(resolve_template "$kind" "$repo" "$name")"
   if [[ -z "$mid" ]]; then
     echo "[ERROR] No TEMPLATE found for kind=${kind}"
     return 1
   fi
   cat > "${path}/.env" <<EOF
-BASE_URL=${AOC_API}
+BASE_URL=${BASE_URL}
 AOC_MODULATION_TOKEN=${API_TOKEN:-$TOKEN}
 MODEL_TEMPLATE_ID=${mid}
 OUTDIR=./artifacts
@@ -286,19 +392,21 @@ EOF
 }
 
 echo "============================================================"
-echo "[STEP] Modulate models (or skip if --idempotent)"
+echo "[STEP] Modulate models (or skip in idempotent mode)"
 echo "============================================================"
-for entry in "${MODEL_KINDS[@]}"; do
+while IFS=$'\t' read -r entry repo name; do
   run_modulator "$entry" "../../modulators/${entry}" || true
-  mid=$(resolve_template "$entry")
+  mid=$(resolve_template "$entry" "$repo" "$name")
   if [[ -n "$mid" ]]; then
     MODEL_IDS+=("$mid")
     if [[ "$entry" == "vocoder" ]]; then
       VOCODER_ID="$mid"
     fi
     ensure_model_kind "$mid" "$entry"
+    upper_key=$(printf '%s' "$entry" | tr '[:lower:]' '[:upper:]')
+    save_env_var "ROBOT_${upper_key}_TEMPLATE_ID" "$mid"
   fi
-done
+done < <(echo "$MODEL_SPEC_JSON" | jq -r '.[] | [.kind, .repo, .name] | @tsv')
 
 if [[ ${#MODEL_IDS[@]} -eq 0 ]]; then
   echo "[ERROR] No model templates resolved. Aborting."
@@ -416,7 +524,7 @@ build_model_entry() {
 
 MODEL_ENTRIES=()
 for mid in "${MODEL_IDS[@]}"; do
-  doc=$(curl -s -H "Authorization: Bearer ${API_TOKEN}" "${AOC_API}/models/${mid}")
+  doc=$(curl -s -H "Authorization: Bearer ${API_TOKEN}" "${BASE_URL}/models/${mid}")
   mkind=$(echo "$doc" | jq -r '.kind // .model_kind // "language"')
   entry=$(build_model_entry "$mid" "$mkind")
   # Attach aux refs to TTS config
@@ -434,7 +542,7 @@ tmp_models=$(mktemp)
 echo "$MODELS_JSON" > "$tmp_models"
 echo "[INFO] Creating agent template via API..."
 rm -f "$tmp_models"
-RESP=$(curl -s -X POST "$AOC_API/agents" \
+RESP=$(curl -s -X POST "$BASE_URL/agents" \
   -H "Authorization: Bearer ${API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "{

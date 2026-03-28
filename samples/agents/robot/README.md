@@ -10,9 +10,10 @@ The agent can **hear, see, think, and speak** using offline models after being v
 >    - You must have an active Ephapsys account.  
 >    - Get `AOC_ORG_ID` + `AOC_PROVISIONING_TOKEN` from AOC.  
 > 
-> 2. **Model Modulation**  
->    - All required models (STT, TTS, Language, Vision, Embedding) must be modulated in the AOC. Look into **'modulators** folder for  examples.
->    - Without modulation, the TrustedAgent will not be able to fetch runtime artifacts.  
+> 2. **Model Bootstrapping**  
+>    - `./push.sh --local` registers the baseline robot models and idempotently publishes them by default.
+>    - The starter embedding model is `sentence-transformers/all-MiniLM-L6-v2`, which does not require gated Hugging Face access.
+>    - Set `ROBOT_ENABLE_WORLD_MODEL=1` if you also want to bootstrap the optional V-JEPA world model (`facebook/vjepa2-vitl-fpc64-256`).
 > 
 > 3. **Agent Template**  
 >    - You must create an Agent Template in the AOC that references these modulated models.  
@@ -74,24 +75,57 @@ flowchart TD
 
 ### 1. Install dependencies
 ```bash
-pip install "ephapsys[modulation,audio,vision,embedding]"
+pip install "ephapsys[audio,vision,embedding]"
 pip install webrtcvad sounddevice pyaudio
 ```
 
 ### 2. Set environment variables (or create .env file)
 ```bash
-export AOC_API_URL=http://localhost:8000
+export AOC_BASE_URL=https://api.ephapsys.com
 export AOC_ORG_ID=org_xxxxxxxxx
-export AOC_PROVISIONING_TOKEN=bt_xxxxxxxxx
-export AGENT_TEMPLATE_ID=agent_robot
-export PERSONALIZE_ANCHOR=tpm
+export AOC_PROVISIONING_TOKEN=boot_xxxxxxxxx
+export AOC_MODULATION_TOKEN=mod_xxxxxxxxx
+export AGENT_TEMPLATE_NAME="Robot Agent Template"
+export PERSONALIZE_ANCHOR=none
+export ROBOT_ENABLE_WORLD_MODEL=0
 ```
 
-### 3. Run the robot agent
-Use the provided shell wrapper:
+### 3. First run
+
+Use the one-command bootstrap:
 
 ```bash
- ./run.sh
+./quickstart.sh
+```
+
+If `.env` is missing, this creates it from `.env.example` and stops so you can
+fill in the required values. Rerun `./quickstart.sh` after editing `.env`.
+
+### 4. Direct entrypoints
+
+Bootstrap robot templates locally:
+
+```bash
+./push.sh --local
+```
+
+By default this uses idempotent publish for the model templates. If you want the
+robot stack to run full modulation instead, use:
+
+```bash
+./push.sh --local --no-idempotent
+```
+
+To include the optional V-JEPA world-model template in the robot stack:
+
+```bash
+ROBOT_ENABLE_WORLD_MODEL=1 ./push.sh --local
+```
+
+Run the robot agent locally:
+
+```bash
+./run.sh --local
 ```
 
 ---
@@ -124,5 +158,16 @@ Unlike a browser app, this Python demo will not pop up a permission request for 
 ## 📂 Files
 
 - `robot_agent.py` → Main Python sample agent loop (mic until silence, cam frame every N seconds, FAISS memory).
-- `run.sh` → Convenience wrapper to start the agent with environment setup.
+- `quickstart.sh` → Creates `.env` if needed, bootstraps robot templates, then launches the sample.
+- `push.sh` → Public bootstrap entrypoint that dispatches to `push_local.sh`.
+- `run.sh` → Public local run entrypoint that dispatches to `run_local.sh`.
+- `push_local.sh` → Current local implementation for model registration/modulation and agent template creation.
+- `run_local.sh` → Current local implementation for robot runtime startup.
 - `.env` → cp .env.example .env
+
+For repo-local SDK development only, you can force the sample to install the SDK
+from this checkout by running:
+
+```bash
+ROBOT_USE_LOCAL_SDK=1 ./run.sh --local
+```
