@@ -245,7 +245,7 @@ case "${SDK_PACKAGE_SOURCE,,}" in
     REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/robot-brain\nsource ~/.venvs/robot-brain/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install '"$CUSTOM_INDEX_FLAGS"$' "ephapsys[audio,vision,embedding]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r ~/'"$REMOTE_DIR"'/requirements_brain.txt >/dev/null'
     ;;
   *)
-    error "SDK_PACKAGE_SOURCE must be one of: pypi, testpypi, custom"
+    error "Unsupported SDK_PACKAGE_SOURCE value"
     exit 1
     ;;
 esac

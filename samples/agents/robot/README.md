@@ -174,7 +174,6 @@ Notes for `--gcp`:
 - runs `robot_remote_agent.py` locally so your body and terminal stay local
 - GCP deployment settings come from local `.env.gcp` and are not tracked
 - package-source overrides are env-based:
-  - `SDK_PACKAGE_SOURCE=testpypi`
   - `SDK_PACKAGE_SOURCE=custom` with `SDK_INDEX_URL=...`
 - detailed setup: [GCP.md](/Users/aidevmac/Projects/Ephapsys/Product/ephapsys-sdk/samples/agents/robot/GCP.md)
 

@@ -46,7 +46,7 @@ GPU:
 - `GPU_MACHINE_TYPE`
 
 Package source:
-- `SDK_PACKAGE_SOURCE=pypi|testpypi|custom`
+- `SDK_PACKAGE_SOURCE=pypi|custom`
 - `SDK_INDEX_URL`
 - `SDK_EXTRA_INDEX_URL`
 
