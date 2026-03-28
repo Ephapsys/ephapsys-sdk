@@ -39,5 +39,6 @@ samples/**/checkpoints/
 samples/**/logs/
 samples/**/artifacts/
 samples/**/results/
+samples/**/tests/
 dist/
 build/
