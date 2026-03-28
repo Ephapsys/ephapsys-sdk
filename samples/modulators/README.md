@@ -23,9 +23,10 @@ pip install "ephapsys[all]"
 |-------------|--------------------------------------|-----------------------------|---------------|-------|
 | **TTS**     | `microsoft/speecht5_tts`             | `wer`, `mos`                | `tts/`        | Speech synthesis |
 | **STT**     | `openai/whisper-tiny.en`             | `wer`                       | `stt/`        | Speech recognition |
-| **Language**| `google/flan-t5-small`               | `accuracy`, `perplexity`, `loss` | `language/` | Text generation & classification |
-| **Embedding**| `google/embeddinggemma-300m`        | `cosine_sim`, `recall_at_k` | `embedding/`  | Text embedding evaluation |
+| **Language**| `Qwen/Qwen3.5-0.8B`                  | `accuracy`, `perplexity`, `loss` | `language/` | Text generation & classification |
+| **Embedding**| `sentence-transformers/all-MiniLM-L6-v2` | `cosine_sim`, `recall_at_k` | `embedding/`  | Text embedding evaluation |
 | **Vision**  | `hustvl/yolos-base`                  | `accuracy`, `fid`           | `vision/`     | Object detection & classification |
+| **World**   | `facebook/vjepa2-vitl-fpc64-256`     | `accuracy`, `loss`          | `world/`      | Experimental scaffold for temporal world models |
 | **RL**      | `<your-rl-model-repo>`               | `reward`, `success_rate`    | `rl/`         | Reinforcement learning loop (Gym/Isaac/etc.) |
 | **Audio**   | `superb/wav2vec2-base-superb-ks`     | `accuracy`                  | `audio/`      | Audio classification |
 
@@ -91,4 +92,4 @@ flowchart TD
 
 ---
 
-✅ With this structure, we can easily plug in new Hugging Face models or custom repos, while keeping a uniform workflow across **Language, Vision, Speech, RL, Embeddings, and Audio**.
+✅ With this structure, we can easily plug in new Hugging Face models or custom repos, while keeping a uniform workflow across **Language, Vision, World Models, Speech, RL, Embeddings, and Audio**.
