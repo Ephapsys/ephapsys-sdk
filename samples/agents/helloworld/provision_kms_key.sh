@@ -7,14 +7,14 @@
 #
 # Example:
 #   ./provision_kms_key.sh \
-#       --project ephapsys-development \
-#       --location us-central1 \
-#       --keyring agents \
-#       --key helloworld \
-#       --service-account hello-agent@ephapsys-development.iam.gserviceaccount.com \
+#       --project <your-project-id> \
+#       --location <your-kms-location> \
+#       --keyring <your-key-ring> \
+#       --key <your-key-name> \
+#       --service-account <your-service-account-email> \
 #       --hsm
 #
-# After running, set HSM_KMS_KEY in your .env.* to the printed resource path.
+# After running, set HSM_KMS_KEY in your local .env.gcp file to the printed resource path.
 # ============================================================
 
 set -euo pipefail
@@ -125,7 +125,7 @@ gcloud kms keys add-iam-policy-binding "$KEY_NAME" \
 PRIMARY_VERSION="$(gcloud kms keys describe "$KEY_NAME" --project "$PROJECT_ID" --location "$LOCATION" --keyring "$KEY_RING" --format='value(primary.name)' || true)"
 
 echo
-echo "✅ Done. Set the following in your .env.stag / .env.prod:"
+echo "✅ Done. Set the following in your local .env.gcp:"
 echo
 if [[ -n "$PRIMARY_VERSION" ]]; then
   echo "HSM_KMS_KEY=${PRIMARY_VERSION}"
