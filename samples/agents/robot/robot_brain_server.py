@@ -71,9 +71,13 @@ async def health():
 async def ws_state(ws: WebSocket):
     _ensure_brain_task()
     await ws.accept()
+    last_snapshot = None
     try:
         while True:
-            await ws.send_text(json.dumps({"snapshot": state_face.snapshot()}))
-            await asyncio.sleep(0.25)
+            snapshot = state_face.snapshot()
+            if snapshot != last_snapshot:
+                await ws.send_text(json.dumps({"snapshot": snapshot}))
+                last_snapshot = snapshot
+            await asyncio.sleep(0.1)
     except WebSocketDisconnect:
         return

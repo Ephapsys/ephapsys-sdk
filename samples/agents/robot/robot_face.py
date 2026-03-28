@@ -279,9 +279,10 @@ class RobotFace(RobotFaceBase):
     def live(self, greeting):
         return Live(
             self.render_status("-", "-", greeting),
-            refresh_per_second=4,
+            refresh_per_second=2,
             console=self.console_live,
-            screen=True,
+            screen=False,
+            auto_refresh=False,
         )
 
 
