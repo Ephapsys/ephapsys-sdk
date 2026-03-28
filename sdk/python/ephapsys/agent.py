@@ -2515,6 +2515,8 @@ class TrustedAgent:
                 result = self._run_vision_generate(rt, input_data)
             else:
                 result = self._run_vision(rt, input_data)
+        elif kind == "world":
+            result = self._run_world(rt, input_data)
         elif kind == "tts":
             result = self._run_tts(rt, input_data)
         elif kind == "stt":
@@ -3576,6 +3578,17 @@ class TrustedAgent:
         Placeholder multimodal generation: currently not implemented.
         """
         raise RuntimeError("Multimodal generation is not supported yet; provide a generation-capable model or use similarity mode.")
+
+
+    def _run_world(self, runtime: Dict[str, Any], payload: Any):
+        """
+        Placeholder world-model adapter.
+        The SDK can prepare and cache world-model runtimes, but sample-specific
+        adapters should own temporal input formatting and downstream decoding.
+        """
+        raise RuntimeError(
+            "World-model inference is not wired into the generic SDK yet; use a sample-specific adapter around the prepared runtime."
+        )
 
 
     # --- Audio (audio event classification) ---
