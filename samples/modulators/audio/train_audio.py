@@ -30,7 +30,7 @@ Before starting a job in the UI:
 
 import os, sys, json, datetime, argparse
 import torch
-from transformers import AutoProcessor, AutoModelForAudioClassification
+from transformers import AutoFeatureExtractor, AutoProcessor, AutoModelForAudioClassification
 from datasets import load_dataset
 import evaluate
 
@@ -77,7 +77,11 @@ def main():
     # --- Load Audio classification model from local snapshot ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model_id = recipe.get("SourceRepo") or "superb/wav2vec2-base-superb-ks"
-    processor = AutoProcessor.from_pretrained(local_model_dir, local_files_only=True)
+    try:
+        processor = AutoFeatureExtractor.from_pretrained(local_model_dir, local_files_only=True)
+    except Exception:
+        # Some audio model cards only ship preprocessor files, not tokenizer assets.
+        processor = AutoProcessor.from_pretrained(local_model_dir, local_files_only=True)
     model = AutoModelForAudioClassification.from_pretrained(local_model_dir, local_files_only=True).to(device)
 
     # --- Extract config from recipe ---
