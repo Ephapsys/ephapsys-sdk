@@ -28,11 +28,12 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../modulate_local_common.sh"
+
 # ---------------- LOAD .env ----------------
-if [ -f ".env" ]; then
-  echo "[INFO] Loading environment from .env"
-  export $(grep -v '^#' .env | xargs)
-fi
+modulator_load_env_file ".env"
 
 # ---------------- CONFIG ----------------
 BASE_URL=${AOC_BASE_URL:-${BASE_URL:-"http://localhost:7001"}}       # Backend AOC API
@@ -45,6 +46,8 @@ if [ -z "$AOC_ORG_ID" ] || [ -z "$AOC_MODULATION_TOKEN" ] || [ -z "$MODEL_TEMPLA
   echo "[ERROR] AOC_ORG_ID, AOC_MODULATION_TOKEN and MODEL_TEMPLATE_ID must be set in .env or env vars."
   exit 1
 fi
+
+modulator_prepare_env
 
 # ---------------- RUN ----------------
 echo "[INFO] Starting EphapticSTT Trainer..."

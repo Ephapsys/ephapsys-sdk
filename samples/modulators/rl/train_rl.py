@@ -37,6 +37,23 @@ YELLOW = "\033[93m"
 RESET = "\033[0m"
 
 
+class _RLPlaceholderArtifact:
+    """Minimal artifact shim so finalize_and_certify can export RL sample outputs."""
+
+    def named_parameters(self):
+        return []
+
+    def save_pretrained(self, outdir: str):
+        os.makedirs(outdir, exist_ok=True)
+        payload = {
+            "kind": "rl",
+            "artifact": "placeholder",
+            "note": "Current RL sample streams synthetic metrics and does not persist a real policy checkpoint yet.",
+        }
+        with open(os.path.join(outdir, "placeholder_rl_artifact.json"), "w") as f:
+            json.dump(payload, f, indent=2)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_url", type=str, default=os.getenv("AOC_BASE_URL", os.getenv("BASE_URL", "http://localhost:7001")))
@@ -86,23 +103,27 @@ def main():
 
     # --- Run evaluation with streaming metrics ---
     last = None
+    all_metrics = []
     for update in mc.compute_rl_metrics_stream(
         args.model_template_id,
         episodes=episodes
     ):
         last = update
+        all_metrics.append(update)
 
     print(f"{GREEN}Final aggregated metrics: {last}{RESET}")
 
     # --- Report back to backend ---
+    placeholder = _RLPlaceholderArtifact()
     mc.finalize_and_certify(
         run_dir,
-        None,       # RL may not have a Hugging Face model artifact
-        None,       # no tokenizer/processor needed
+        placeholder,
+        placeholder,
         last,
         variant,
         job_id,
-        args.model_template_id
+        args.model_template_id,
+        all_metrics=all_metrics,
     )
     print(f"{GREEN}Reported metrics to backend and certified results.{RESET}")
 
