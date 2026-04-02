@@ -3,6 +3,8 @@
 This sample demonstrates the simplest possible agent using the Ephapsys SDK.  
 It verifies, personalizes (if needed), and runs a language model to output **"Hello World"**.
 
+`AOC` means **Agent Ops Center**, the Ephapsys control plane where you retrieve credentials, inspect jobs, and manage templates.
+
 ## Fastest Local Path
 
 The default one-command path is now:
@@ -25,8 +27,9 @@ For the default HelloWorld flow, the only values you normally need to set in `.e
 - `AOC_MODULATION_TOKEN`
 
 Leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run. `./quickstart.sh` will first try to reuse existing HelloWorld starter templates, and only call `./push.sh` if it cannot find them.
-Leave `HF_TOKEN` blank unless you switch away from the default public repo (`Qwen/Qwen3.5-0.8B`) to a gated or private model.
-`AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI. `./push.sh` can bootstrap the model and agent template IDs, but it does not create or refresh provisioning credentials.
+Leave `HF_TOKEN` commented out unless you switch away from the default public repo (`Qwen/Qwen3.5-0.8B`) to a gated or private model.
+`AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI under Organization -> Tokens. `./push.sh` can bootstrap the model and agent template IDs, but it does not create or refresh provisioning credentials.
+`AOC_MODULATION_TOKEN` is also found under Organization -> Tokens and is only needed for `./push.sh`.
 
 If you want to bootstrap everything from this sample instead of manually creating a model template, running modulation, and then creating an agent template, use:
 
@@ -116,6 +119,16 @@ Use this order for the least friction:
 Keep in mind:
 - `AOC_PROVISIONING_TOKEN` is a secret developer credential copied from the AOC UI.
 - `./push.sh` writes `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` into `.env`, but it does not mint or rotate provisioning tokens.
+
+If you are writing your own Python script and expect values from `.env`, load it explicitly:
+
+```python
+from dotenv import load_dotenv
+from ephapsys import TrustedAgent
+
+load_dotenv()
+agent = TrustedAgent.from_env()
+```
 
 If startup fails, check these first:
 - `404 Agent template not found`: `AGENT_TEMPLATE_ID` is wrong or the template does not exist in that AOC environment.

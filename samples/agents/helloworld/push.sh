@@ -240,8 +240,8 @@ cli_login() {
   warn "No reusable CLI session found for ${AOC_API}; falling back to interactive CLI login." >&2
 
   local cli_user cli_pass login_resp
-  read -r -p "Enter CLI username (email): " cli_user
-  read -r -s -p "Enter CLI password: " cli_pass
+  read -r -p "Enter your Ephapsys account email: " cli_user
+  read -r -s -p "Enter your Ephapsys account password: " cli_pass
   printf '\n'
   login_resp=$(curl -sS -X POST "$CLI_API/login" \
     -H "Content-Type: application/json" \
@@ -295,9 +295,8 @@ register_model_template() {
       revision: $revision,
       auto_register: true,
       name: $model_name,
-      model_kind: $model_kind,
-      hf_token: $hf_token
-    }')
+      model_kind: $model_kind
+    } + (if ($hf_token | gsub("^\\s+|\\s+$"; "")) != "" then {hf_token: $hf_token} else {} end)')
   response=$(curl -sS -X POST "$CLI_API/models/register" \
     -H "Authorization: Bearer ${cli_token}" \
     -H "Content-Type: application/json" \

@@ -10,13 +10,15 @@ if [[ ! -f ".env" && -f ".env.example" ]]; then
 [INFO] Created .env from .env.example
 
 Before continuing, edit .env and set:
-  - AOC_BASE_URL
+  - AOC_BASE_URL=https://api.ephapsys.com
   - AOC_ORG_ID
-  - AOC_PROVISIONING_TOKEN
-  - AOC_MODULATION_TOKEN
-  - HF_TOKEN (only if your chosen model repo requires it)
+  - AOC_PROVISIONING_TOKEN (boot_...)
+  - AOC_MODULATION_TOKEN (mod_...)
+  - HF_TOKEN only if your chosen model repo requires it
 
-If you do not have an Ephapsys account yet, visit https://ephapsys.com, sign up, and generate the required organization and token values first.
+If you do not have an Ephapsys account yet, visit https://ephapsys.com and sign up first.
+
+AOC means Agent Ops Center. You can retrieve the org ID and tokens in the AOC dashboard under Organization -> Tokens.
 
 Then rerun:
   ./quickstart.sh
