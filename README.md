@@ -5,7 +5,7 @@ Ephapsys SDK helps you deploy trustworthy AI agents enhanced and secured using e
 With the Ephapsys SDK, you can:
 - Cryptographically seal your models to guarantee provenance and integrity during fine-tuning. 
 - Leverage ephaptic coupling during and after fine-tuning to boost your model performance.
-- Deploy, monitor, audit, and instantly override agent behaviors via your Agents Ops Center.
+- Deploy, monitor, audit, and instantly override agent behaviors via your Agent Ops Center (AOC).
 
 ## Prerequisites
 - Python 3.9+
@@ -146,11 +146,14 @@ Fill in `.env` with:
 - `AOC_ORG_ID`
 - `AOC_PROVISIONING_TOKEN`
 - `AOC_MODULATION_TOKEN`
+- leave `HF_TOKEN` commented out unless you need a gated/private Hugging Face repo
+- leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run so `quickstart.sh` can populate them
 
 Notes:
 - `quickstart.sh` creates `.env` from `.env.example` if needed, then stops so you can fill in the required values.
 - on rerun, `quickstart.sh` prefers existing HelloWorld starter templates first and only falls back to `./push.sh --local` if they are missing.
-- `AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI. `./push.sh` can write template IDs back into `.env`, but it does not create or refresh provisioning credentials for you.
+- `AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI under Organization -> Tokens. `./push.sh` can write template IDs back into `.env`, but it does not create or refresh provisioning credentials for you.
+- `AOC_MODULATION_TOKEN` is also retrieved from Organization -> Tokens and is only required when you run `./push.sh`.
 - `run.sh --local` is the public local entrypoint and already runs preflight automatically before launch.
 - `run.sh --local` uses the currently installed SDK in your active Python environment. For internal repo development only, set `HELLOWORLD_USE_LOCAL_SDK=1` to install from the local checkout instead.
 - `run_local.sh` still exists as the underlying helper, but `run.sh` is the supported entrypoint.
@@ -158,6 +161,16 @@ Notes:
 - the default HelloWorld language model is `Qwen/Qwen3.5-0.8B`.
 - On macOS and non-TPM machines, the sample defaults to `PERSONALIZE_ANCHOR=none` for a smoother local dev flow.
 - On Linux with `tpm2-tools` installed, the sample defaults to `PERSONALIZE_ANCHOR=tpm`.
+
+If you are loading configuration from a local `.env` file in custom scripts, install and use `python-dotenv` explicitly:
+
+```python
+from dotenv import load_dotenv
+from ephapsys import TrustedAgent
+
+load_dotenv()
+agent = TrustedAgent.from_env()
+```
 
 ## Contributions, Support and Security
 - **Contributions:** Open issues/PRs with clear repro steps, expected vs. actual results, and environment (OS, Python, SDK version). Run lint/tests (`python -m pip install -r requirements-dev.txt && pytest`) before submitting.
