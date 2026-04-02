@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ephapsys"
-version = "0.2.52"
+version = "0.2.55"
 description = "Ephapsys helps you empower and govern AI agents."
 readme = "README.md"
 authors = [
@@ -21,7 +21,7 @@ dependencies = [
     "numpy>=1.23",
     "psutil>=5.9.0",
     "torch>=2.6.0,<3.0.0",
-    "transformers>=5.3.0",
+    "transformers>=5.3.0,<6.0.0",
     "datasets>=2.14.0,<3.0.0",
     "safetensors>=0.4.5",
 ]
@@ -64,7 +64,7 @@ embedding = [
 all = [
     "google-cloud-kms>=2.21.0",
     "torch>=2.6.0,<3.0.0",
-    "transformers>=5.3.0",
+    "transformers>=5.3.0,<6.0.0",
     "datasets>=2.14.0,<3.0.0",
     "safetensors>=0.4.5",
     "librosa>=0.10.2.post1",
