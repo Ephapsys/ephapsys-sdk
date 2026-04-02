@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export MODULATOR_DIR="$SCRIPT_DIR"
-export MODULATOR_KIND="language"
-export TRAINER_SCRIPT="train_language.py"
-export DEFAULT_OUTDIR="./artifacts"
+export MODULATOR_KIND="audio"
+export TRAINER_SCRIPT="train_audio.py"
+export DEFAULT_OUTDIR="./artifacts_audio"
 
 exec "$SCRIPT_DIR/../modulate_gcp_common.sh" "$@"

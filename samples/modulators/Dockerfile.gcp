@@ -1,0 +1,30 @@
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    git python3-pip jq pciutils ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --upgrade pip
+
+COPY requirements.gcp.txt /tmp/requirements.gcp.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.gcp.txt
+
+RUN rm -rf /root/.cache/huggingface && \
+    unset HF_EVALUATE_OFFLINE && unset HF_HUB_OFFLINE
+
+ENV HF_EVALUATE_OFFLINE=0 \
+    HF_HUB_OFFLINE=0 \
+    HF_HOME=/root/.cache/huggingface \
+    HF_HUB_CACHE=/root/.cache/huggingface/hub \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    HF_HUB_ENABLE_HF_TRANSFER=0
+
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
+
+COPY .docker_sdk/ephapsys /app/ephapsys
+COPY modulator/ /app/
+
+CMD ["bash"]
