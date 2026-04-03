@@ -3640,7 +3640,7 @@ class TrustedAgent:
         vecs = model.encode(texts, convert_to_numpy=True)
 
         enforced_output, out_policies = self.enforce_policies_model_kind(vecs, "embedding", "output")
-        if not enforced_output:
+        if enforced_output is None:
             logger.warning("⚠️ Embedding output blocked by policies: %s", out_policies)
             return "[BLOCKED BY POLICIES]"
 
