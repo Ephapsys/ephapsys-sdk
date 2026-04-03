@@ -51,6 +51,15 @@ modulator_prepare_env() {
   sdk_source="${MODULATOR_SDK_PACKAGE_SOURCE:-${SDK_PACKAGE_SOURCE:-local}}"
   sdk_version="${MODULATOR_SDK_VERSION:-${SDK_VERSION:-}}"
 
+  if [ "${MODULATOR_SKIP_SDK_SETUP:-0}" = "1" ]; then
+    modulator_info "Using pre-provisioned Python environment (MODULATOR_SKIP_SDK_SETUP=1)"
+    if ! python3 -c "import ephapsys" >/dev/null 2>&1; then
+      modulator_error "Pre-provisioned environment does not provide the ephapsys package."
+      exit 1
+    fi
+    return
+  fi
+
   if [ ! -x "$MODULATOR_SDK_SETUP_SH" ]; then
     modulator_error "SDK setup helper not found at $MODULATOR_SDK_SETUP_SH"
     exit 1
