@@ -34,6 +34,26 @@ warn() {
   printf '[WARN] %s\n' "$*" >&2
 }
 
+MODE="local"
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --gcp)
+      MODE="gcp"
+      shift
+      ;;
+    --local)
+      MODE="local"
+      shift
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
 save_env_var() {
   local key="$1"
   local value="$2"
@@ -119,7 +139,23 @@ resolve_existing_templates() {
 
 if ! resolve_existing_templates; then
   info "No reusable HelloWorld starter templates found; bootstrapping with push.sh."
-  ./push.sh --mode local "$@"
+  if [[ "$MODE" == "gcp" ]]; then
+    if [[ ${#ARGS[@]} -gt 0 ]]; then
+      ./push.sh --mode gcp "${ARGS[@]}"
+    else
+      ./push.sh --mode gcp
+    fi
+  else
+    if [[ ${#ARGS[@]} -gt 0 ]]; then
+      ./push.sh --mode local "${ARGS[@]}"
+    else
+      ./push.sh --mode local
+    fi
+  fi
 fi
 
-./run.sh --local
+if [[ "$MODE" == "gcp" ]]; then
+  ./run.sh --gcp
+else
+  ./run.sh --local
+fi

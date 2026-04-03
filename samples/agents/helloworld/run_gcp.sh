@@ -25,12 +25,31 @@ success() {
   printf "${GREEN}[DONE]${RESET} %s\n" "$1"
 }
 
+selected() {
+  printf "${GREEN}[SELECTED]${RESET} %s\n" "$1"
+}
+
 warn() {
   printf "${YELLOW}[WARN]${RESET} %s\n" "$1"
 }
 
 info() {
   printf "${BLUE}[INFO]${RESET} %s\n" "$1"
+}
+
+wait_for_ssh() {
+  local attempts="${1:-24}"
+  local delay="${2:-5}"
+  local cmd="$3"
+  local i
+  for ((i=1; i<=attempts; i++)); do
+    if "${SSH_CMD[@]}" "$cmd"; then
+      return 0
+    fi
+    warn "SSH not ready yet (attempt ${i}/${attempts}). Waiting ${delay}s..."
+    sleep "$delay"
+  done
+  return 1
 }
 
 UPLOAD_ENV_FILE=""
@@ -42,17 +61,28 @@ cleanup_temp_files() {
 trap cleanup_temp_files EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../" && pwd)"
-PYPROJECT="$REPO_ROOT/Product/SDK/python/pyproject.toml"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../" && pwd)"
+PYPROJECT="$REPO_ROOT/sdk/python/pyproject.toml"
 GCP_ENV_FILE="${GCP_ENV_FILE:-${HELLOWORLD_GCP_ENV_FILE:-$SCRIPT_DIR/.env.gcp}}"
 INTERACTIVE=true
 CPU_ONLY=true
 META_FILE="$SCRIPT_DIR/.last_gcp_instance"
+REUSE_INSTANCE=true
+REUSED_EXISTING_INSTANCE=false
 
 if [ -f "$GCP_ENV_FILE" ]; then
   info "Using GCP settings from $GCP_ENV_FILE"
   set -a && source "$GCP_ENV_FILE" && set +a
 fi
+
+case "${INTERACTIVE:-true}" in
+  1|true|TRUE|yes|YES|on|ON)
+    INTERACTIVE=true
+    ;;
+  0|false|FALSE|no|NO|off|OFF)
+    INTERACTIVE=false
+    ;;
+esac
 
 PROJECT_ID="${PROJECT_ID:-}"
 ZONE="${ZONE:-}"
@@ -66,9 +96,21 @@ GPU_MACHINE_TYPE="${GPU_MACHINE_TYPE:-}"
 GPU_COUNT="${GPU_COUNT:-1}"
 GPU_IMAGE_FAMILY="${GPU_IMAGE_FAMILY:-}"
 USE_GPU="${USE_GPU:-0}"
+GPU_FALLBACKS="${GPU_FALLBACKS:-}"
+ZONE_FALLBACKS="${ZONE_FALLBACKS:-}"
+REGION_FALLBACKS="${REGION_FALLBACKS:-}"
 SDK_PACKAGE_SOURCE="${SDK_PACKAGE_SOURCE:-${HELLOWORLD_SDK_PACKAGE_SOURCE:-pypi}}"
 SDK_INDEX_URL="${SDK_INDEX_URL:-${HELLOWORLD_SDK_INDEX_URL:-}}"
 SDK_EXTRA_INDEX_URL="${SDK_EXTRA_INDEX_URL:-${HELLOWORLD_SDK_EXTRA_INDEX_URL:-}}"
+
+case "${DISK_SIZE:-}" in
+  *GB|*gb)
+    disk_size_num="${DISK_SIZE%[Gg][Bb]}"
+    if [[ "$disk_size_num" =~ ^[0-9]+$ && "$disk_size_num" -lt 100 ]]; then
+      DISK_SIZE="100GB"
+    fi
+    ;;
+esac
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -79,6 +121,8 @@ while [[ $# -gt 0 ]]; do
     --instance-prefix) INSTANCE_PREFIX="$2"; shift 2 ;;
     --interactive) INTERACTIVE=true; shift ;;
     --no-interactive) INTERACTIVE=false; shift ;;
+    --reuse-instance) REUSE_INSTANCE=true; shift ;;
+    --fresh-instance) REUSE_INSTANCE=false; shift ;;
     --gpu)
       CPU_ONLY=false
       shift
@@ -251,15 +295,10 @@ else
 fi
 
 SDK_VERSION="$(PYPROJECT_PATH="$PYPROJECT" python3 - <<'PY'
-import os, pathlib
-from typing import Any
-try:
-    import tomllib as toml
-except ModuleNotFoundError:
-    import tomli as toml  # type: ignore
-pyproject = pathlib.Path(os.environ["PYPROJECT_PATH"])
-data: dict[str, Any] = toml.loads(pyproject.read_text())
-print(data.get("project", {}).get("version", "0.0.0"))
+import os, pathlib, re
+text = pathlib.Path(os.environ["PYPROJECT_PATH"]).read_text()
+match = re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"', text)
+print(match.group(1) if match else "0.0.0")
 PY
 )"
 
@@ -268,7 +307,8 @@ if [[ "$SDK_VERSION" == "0.0.0" || -z "$SDK_VERSION" ]]; then
   exit 1
 fi
 
-case "${SDK_PACKAGE_SOURCE,,}" in
+SDK_PACKAGE_SOURCE_LC="$(printf '%s' "$SDK_PACKAGE_SOURCE" | tr '[:upper:]' '[:lower:]')"
+case "$SDK_PACKAGE_SOURCE_LC" in
   pypi)
     PIP_INSTALL_CMD="pip install ephapsys==${SDK_VERSION}"
     TARGET_REGISTRY="PyPI"
@@ -296,34 +336,40 @@ case "${SDK_PACKAGE_SOURCE,,}" in
 esac
 
 create_instance() {
+  local zone="$1"
+  local gpu_label="${2:-}"
   local machine="$MACHINE_TYPE"
   local image_family="$IMAGE_FAMILY"
   local image_project="$IMAGE_PROJECT"
   local extra_args=()
 
   if [ "$CPU_ONLY" = false ]; then
-    machine="$GPU_MACHINE_TYPE"
+    local accel_type
+    local gpu_count="$GPU_COUNT"
+    local gpu_type_lc
+    gpu_type_lc="$(printf '%s' "$gpu_label" | tr '[:upper:]' '[:lower:]')"
     image_family="$GPU_IMAGE_FAMILY"
     image_project="deeplearning-platform-release"
-    local accel_type
-    case "${GPU_TYPE,,}" in
+    case "$gpu_type_lc" in
       t4)
         accel_type="nvidia-tesla-t4"
-        ;;
-      a100)
-        accel_type="nvidia-tesla-a100"
-        machine="a2-highgpu-${GPU_COUNT}g"
+        machine="n1-standard-8"
         ;;
       l4)
         accel_type="nvidia-l4"
-        machine="g2-standard-${GPU_COUNT}"
+        machine="g2-standard-8"
+        ;;
+      a100)
+        accel_type="nvidia-tesla-a100"
+        machine="a2-highgpu-${gpu_count}g"
         ;;
       *)
-        accel_type="$GPU_TYPE"
+        accel_type="$gpu_label"
+        machine="$GPU_MACHINE_TYPE"
         ;;
     esac
     extra_args+=(
-      --accelerator="type=${accel_type},count=${GPU_COUNT}"
+      --accelerator="type=${accel_type},count=${gpu_count}"
       --metadata="install-nvidia-driver=True"
       --maintenance-policy=TERMINATE
     )
@@ -331,7 +377,7 @@ create_instance() {
 
   gcloud compute instances create "$INSTANCE_NAME" \
     --project="$PROJECT_ID" \
-    --zone="$ZONE" \
+    --zone="$zone" \
     --machine-type="$machine" \
     --shielded-secure-boot \
     --shielded-vtpm \
@@ -348,9 +394,136 @@ create_instance() {
     ${extra_args[@]+"${extra_args[@]}"}
 }
 
+build_zone_candidates() {
+  local zones=("$ZONE")
+  if [[ -n "$ZONE_FALLBACKS" ]]; then
+    IFS=',' read -r -a fallback_zones <<< "$ZONE_FALLBACKS"
+    local item
+    for item in "${fallback_zones[@]}"; do
+      item="${item// /}"
+      [[ -n "$item" ]] && zones+=("$item")
+    done
+  fi
+
+  local regions=()
+  if [[ -n "$REGION_FALLBACKS" ]]; then
+    IFS=',' read -r -a regions <<< "$REGION_FALLBACKS"
+  else
+    regions=("${ZONE%-*}")
+  fi
+
+  local region suffix item
+  for region in "${regions[@]}"; do
+    region="${region// /}"
+    [[ -z "$region" ]] && continue
+    for suffix in a b c d e f; do
+      item="${region}-${suffix}"
+      [[ "$item" != "$ZONE" ]] && zones+=("$item")
+    done
+  done
+  printf '%s\n' "${zones[@]}" | awk '!seen[$0]++'
+}
+
+build_gpu_candidates() {
+  local gpus=()
+  if [ "$CPU_ONLY" = true ]; then
+    gpus+=("cpu")
+  else
+    gpus+=("$GPU_TYPE")
+    if [[ -n "$GPU_FALLBACKS" ]]; then
+      IFS=',' read -r -a fallback_gpus <<< "$GPU_FALLBACKS"
+      local item
+      for item in "${fallback_gpus[@]}"; do
+        item="${item// /}"
+        [[ -n "$item" ]] && gpus+=("$item")
+      done
+    fi
+  fi
+  printf '%s\n' "${gpus[@]}" | awk '!seen[$0]++'
+}
+
+select_instance_candidate() {
+  local zones=()
+  local gpus=()
+  local zone gpu
+  while IFS= read -r zone; do
+    [[ -n "$zone" ]] && zones+=("$zone")
+  done < <(build_zone_candidates)
+  while IFS= read -r gpu; do
+    [[ -n "$gpu" ]] && gpus+=("$gpu")
+  done < <(build_gpu_candidates)
+
+  local total_gpu=${#gpus[@]}
+  local total_zone=${#zones[@]}
+  local gpu_idx=0 zone_idx
+  local chosen_machine="$MACHINE_TYPE"
+
+  for gpu in "${gpus[@]}"; do
+    gpu_idx=$((gpu_idx + 1))
+    zone_idx=0
+    for zone in "${zones[@]}"; do
+      zone_idx=$((zone_idx + 1))
+      info "Trying candidate gpu=${gpu} zone=${zone} (${gpu_idx}/${total_gpu}, ${zone_idx}/${total_zone})"
+      if create_instance "$zone" "$gpu"; then
+        ZONE="$zone"
+        if [ "$gpu" = "cpu" ]; then
+          chosen_machine="$MACHINE_TYPE"
+        else
+          case "$(printf '%s' "$gpu" | tr '[:upper:]' '[:lower:]')" in
+            t4) chosen_machine="n1-standard-8" ;;
+            l4) chosen_machine="g2-standard-8" ;;
+            a100) chosen_machine="a2-highgpu-${GPU_COUNT}g" ;;
+            *) chosen_machine="$GPU_MACHINE_TYPE" ;;
+          esac
+          GPU_TYPE="$gpu"
+        fi
+        SELECTED_MACHINE="$chosen_machine"
+selected "Selected instance=${INSTANCE_NAME} gpu=${gpu} machine=${SELECTED_MACHINE} zone=${ZONE} project=${PROJECT_ID}"
+        return 0
+      fi
+      warn "Candidate failed: gpu=${gpu} zone=${zone}"
+    done
+  done
+  return 1
+}
+
+reuse_existing_instance() {
+  if [ "$REUSE_INSTANCE" != true ] || [ ! -f "$META_FILE" ]; then
+    return 1
+  fi
+
+  local saved_instance="" saved_project="" saved_zone="" saved_anchor=""
+  # shellcheck source=/dev/null
+  source "$META_FILE"
+  saved_instance="${INSTANCE_NAME:-}"
+  saved_project="${PROJECT_ID:-}"
+  saved_zone="${ZONE:-}"
+  saved_anchor="${ANCHOR:-}"
+
+  if [[ -z "$saved_instance" || -z "$saved_project" || -z "$saved_zone" ]]; then
+    return 1
+  fi
+
+  if [[ "$saved_project" != "$PROJECT_ID" ]]; then
+    return 1
+  fi
+
+  if ! gcloud compute instances describe "$saved_instance" --project="$saved_project" --zone="$saved_zone" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  INSTANCE_NAME="$saved_instance"
+  ZONE="$saved_zone"
+  RAW_ANCHOR="${saved_anchor:-$RAW_ANCHOR}"
+  REUSED_EXISTING_INSTANCE=true
+  selected "Reusing existing VM: instance=${INSTANCE_NAME} zone=${ZONE} project=${PROJECT_ID}"
+  return 0
+}
+
 SELECTED_MACHINE="$MACHINE_TYPE"
+SELECTED_GPU_LABEL="disabled"
 if [ "$CPU_ONLY" = false ]; then
-  SELECTED_MACHINE="$GPU_MACHINE_TYPE"
+  SELECTED_GPU_LABEL="$GPU_TYPE (count=$GPU_COUNT)"
 fi
 
 info "🚀 Launching HelloWorld VM"
@@ -359,11 +532,16 @@ printf "  ${BLUE}Zone${RESET}         : %s\n" "$ZONE"
 printf "  ${BLUE}Machine type${RESET} : %s\n" "$SELECTED_MACHINE"
 printf "  ${BLUE}Disk size${RESET}    : %s\n" "$DISK_SIZE"
 printf "  ${BLUE}SDK version${RESET}  : %s (%s)\n" "$SDK_VERSION" "$TARGET_REGISTRY"
-printf "  ${BLUE}GPU mode${RESET}     : %s\n" "$([ "$CPU_ONLY" = true ] && echo "disabled" || echo "$GPU_TYPE (count=$GPU_COUNT)")"
+printf "  ${BLUE}GPU mode${RESET}     : %s\n" "$SELECTED_GPU_LABEL"
 printf "  ${BLUE}Instance${RESET}     : %s\n" "$INSTANCE_NAME"
 printf "  ${BLUE}Anchor${RESET}       : %s\n" "$RAW_ANCHOR"
 
-create_instance
+if ! reuse_existing_instance; then
+  if ! select_instance_candidate; then
+    printf "${MAGENTA}❌ Unable to create a HelloWorld VM in %s. Tried GPU=%s and fallback zones/candidates.${RESET}\n" "$PROJECT_ID" "$SELECTED_GPU_LABEL"
+    exit 1
+  fi
+fi
 
 cat <<EOF > "$META_FILE"
 INSTANCE_NAME=$INSTANCE_NAME
@@ -374,13 +552,9 @@ EOF
 
 info "📂 Preparing remote workspace"
 SSH_CMD=(gcloud compute ssh "$INSTANCE_NAME" --project="$PROJECT_ID" --zone="$ZONE" --command)
-if ! "${SSH_CMD[@]}" "mkdir -p ~/${REMOTE_DIR}"; then
-  warn "Initial SSH attempt failed (VM may still be booting). Retrying in 5s..."
-  sleep 5
-  if ! "${SSH_CMD[@]}" "mkdir -p ~/${REMOTE_DIR}"; then
-    warn "SSH still failing. Consider running: gcloud compute ssh $INSTANCE_NAME --project=$PROJECT_ID --zone=$ZONE --troubleshoot"
-    exit 1
-  fi
+if ! wait_for_ssh 24 5 "mkdir -p ~/${REMOTE_DIR}"; then
+  warn "SSH still failing. Consider running: gcloud compute ssh $INSTANCE_NAME --project=$PROJECT_ID --zone=$ZONE --troubleshoot"
+  exit 1
 fi
 
 if [ -n "$REMOTE_KMS_CREDS" ]; then
@@ -398,12 +572,9 @@ info "📤 Copying sample files to VM"
 SYNC_DIR="$(mktemp -d)"
 TEMP_SRC="$SYNC_DIR/src"
 mkdir -p "$TEMP_SRC"
-rsync -a \
-  --exclude ".ephapsys_state" \
-  --exclude ".DS_Store" \
-  --exclude "README.md" \
-  --exclude ".env*" \
-  "$SCRIPT_DIR/" "$TEMP_SRC/"
+cp "$SCRIPT_DIR/helloworld_agent.py" "$TEMP_SRC/"
+cp "$SCRIPT_DIR/run_local.sh" "$TEMP_SRC/"
+cp "$SCRIPT_DIR/reattach_gcp.sh" "$TEMP_SRC/"
 gcloud compute scp --recurse "$TEMP_SRC/." "${INSTANCE_NAME}:~/${REMOTE_DIR}/" \
   --project="$PROJECT_ID" --zone="$ZONE"
 rm -rf "$SYNC_DIR"
@@ -422,6 +593,25 @@ fi
 info "📄 Uploading env file $(basename "$ACTIVE_ENV_FILE")"
 gcloud compute scp "$UPLOAD_ENV_FILE" "${INSTANCE_NAME}:~/${REMOTE_DIR}/.env" \
   --project="$PROJECT_ID" --zone="$ZONE"
+
+if [ "$REUSED_EXISTING_INSTANCE" = true ]; then
+  if gcloud compute ssh "$INSTANCE_NAME" \
+    --project="$PROJECT_ID" \
+    --zone="$ZONE" \
+    --command="test -x ~/${REMOTE_DIR}/.venv/bin/python"; then
+    info "♻️ Reused VM already has a prepared runtime; skipping bootstrap."
+    if [ "$INTERACTIVE" = true ]; then
+      info "Opening interactive session on reused VM..."
+      exec gcloud compute ssh "$INSTANCE_NAME" \
+        --project="$PROJECT_ID" \
+        --zone="$ZONE" \
+        -- -t "cd ~/${REMOTE_DIR} && echo \"[VM] Exporting .env for interactive run\" && set -a && source .env && set +a && source .venv/bin/activate && python helloworld_agent.py"
+    fi
+    success "Reused VM is ready: $INSTANCE_NAME"
+    exit 0
+  fi
+  warn "Reused VM is missing the prepared runtime; continuing with full bootstrap."
+fi
 
 BOOTSTRAP=$(cat <<'EOS'
 cat <<'SCRIPT' > ~/HELLOROOT/.bootstrap.sh
@@ -460,9 +650,13 @@ if [ -f .env ]; then
 else
 echo "[VM][WARN] Missing .env on VM; set env vars manually before running."
 fi
-nohup bash -c 'cd ~/HELLOROOT && source .venv/bin/activate && python helloworld_agent.py >> helloworld.log 2>&1' >/dev/null 2>&1 &
-echo $! > helloworld.pid
-echo -e "${VM_BLUE}[VM] Bot started in background (PID $(cat helloworld.pid)).${VM_RESET}"
+if [ "INTERACTIVE_MODE_PLACEHOLDER" = "true" ]; then
+  echo -e "${VM_BLUE}[VM] Interactive mode requested; skipping background bot launch.${VM_RESET}"
+else
+  nohup bash -c 'cd ~/HELLOROOT && source .venv/bin/activate && python helloworld_agent.py >> helloworld.log 2>&1' >/dev/null 2>&1 &
+  echo $! > helloworld.pid
+  echo -e "${VM_BLUE}[VM] Bot started in background (PID $(cat helloworld.pid)).${VM_RESET}"
+fi
 SCRIPT
 chmod +x ~/HELLOROOT/.bootstrap.sh
 bash ~/HELLOROOT/.bootstrap.sh
@@ -500,6 +694,7 @@ fi
 BOOTSTRAP="${BOOTSTRAP/ANCHOR_APT_PKGS_PLACEHOLDER/${APT_EXTRA_PKGS}}"
 BOOTSTRAP="${BOOTSTRAP/TPM_SNIPPET_PLACEHOLDER/${TPM_BLOCK}}"
 BOOTSTRAP="${BOOTSTRAP//ANCHOR_KIND_PLACEHOLDER/${ANCHOR_TYPE}}"
+BOOTSTRAP="${BOOTSTRAP//INTERACTIVE_MODE_PLACEHOLDER/${INTERACTIVE}}"
 
 TORCH_VERSION="${TORCH_VERSION:-2.2.2}"
 if [ "$CPU_ONLY" = true ]; then
@@ -517,6 +712,14 @@ gcloud compute ssh "$INSTANCE_NAME" \
   --zone="$ZONE" \
   --command="$BOOTSTRAP"
 
+if [ "$INTERACTIVE" = true ]; then
+  info "Opening interactive session..."
+  exec gcloud compute ssh "$INSTANCE_NAME" \
+    --project="$PROJECT_ID" \
+    --zone="$ZONE" \
+    -- -t "cd ~/helloworld && echo \"[VM] Exporting .env for interactive run\" && set -a && source .env && set +a && source .venv/bin/activate && python helloworld_agent.py"
+fi
+
 cat <<EOF
 ${GREEN}✅ HelloWorld agent is running in the background on $INSTANCE_NAME.${RESET}
 
@@ -532,10 +735,3 @@ Remember to stop/delete the VM manually when done:
   gcloud compute instances delete $INSTANCE_NAME --project $PROJECT_ID --zone $ZONE
 EOF
 info "Logs: gcloud compute ssh $INSTANCE_NAME --project $PROJECT_ID --zone $ZONE -- -t \"tail -f ~/helloworld/helloworld.log\""
-if [ "$INTERACTIVE" = true ]; then
-  info "Opening interactive session..."
-  gcloud compute ssh "$INSTANCE_NAME" \
-    --project="$PROJECT_ID" \
-    --zone="$ZONE" \
-    -- -t "cd ~/helloworld && echo \"[VM] Exporting .env for interactive run\" && set -a && source .env && set +a && source .venv/bin/activate && python helloworld_agent.py"
-fi
