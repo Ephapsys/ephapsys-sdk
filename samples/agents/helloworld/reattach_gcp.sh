@@ -27,14 +27,19 @@ exec gcloud compute ssh "$INSTANCE_NAME" \
   -- -t '
 cd ~/helloworld
 if pgrep -f helloworld_agent.py >/dev/null; then
-  echo "[VM] helloworld_agent.py running – dropping into interactive session."
-  set -a
-  source .env
-  set +a
-  source .venv/bin/activate
-  python helloworld_agent.py
-else
-  echo "[VM] No chatbot process running; tailing logs instead."
-  tail -f helloworld.log
+  echo "[VM] Stopping background helloworld_agent.py so this session can own stdin."
+  pkill -f helloworld_agent.py || true
+  sleep 1
 fi
+if [ ! -f .env ] || [ ! -x .venv/bin/python ]; then
+  echo "[VM] Missing .env or .venv; tailing logs instead."
+  tail -f helloworld.log
+  exit 0
+fi
+echo "[VM] Launching interactive HelloWorld session."
+set -a
+source .env
+set +a
+source .venv/bin/activate
+python helloworld_agent.py
 '

@@ -20,7 +20,7 @@ Notes:
 EOF
 }
 
-MODE="local"
+MODE=""
 ARGS=()
 ARGS_COUNT=0
 
@@ -59,8 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$MODE" ]]; then
-  usage
-  exit 1
+  MODE="local"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,6 +74,9 @@ case "$MODE" in
     exec ./run_local.sh
     ;;
   gcp)
-    exec ./run_gcp.sh "${ARGS[@]}"
+    if [[ "$ARGS_COUNT" -gt 0 ]]; then
+      exec ./run_gcp.sh "${ARGS[@]}"
+    fi
+    exec ./run_gcp.sh
     ;;
 esac

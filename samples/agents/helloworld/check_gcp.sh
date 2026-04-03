@@ -48,10 +48,20 @@ if [[ -z "$ACCOUNT" ]]; then
   exit 1
 fi
 
-PROJECT_CHECK="$(gcloud projects describe "$PROJECT_ID" --format='value(projectId)' 2>/dev/null || true)"
+ACTIVE_PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+PROJECT_ERROR_FILE="$(mktemp)"
+PROJECT_CHECK="$(gcloud projects describe "$PROJECT_ID" --format='value(projectId)' 2>"$PROJECT_ERROR_FILE" || true)"
 if [[ "$PROJECT_CHECK" != "$PROJECT_ID" ]]; then
   echo "[ERROR] gcloud cannot access project '$PROJECT_ID'." >&2
+  echo "[ERROR] Active gcloud account: ${ACCOUNT}" >&2
+  echo "[ERROR] Active gcloud project: ${ACTIVE_PROJECT:-<unset>}" >&2
+  if [[ -s "$PROJECT_ERROR_FILE" ]]; then
+    echo "[ERROR] gcloud projects describe output:" >&2
+    sed 's/^/[ERROR]   /' "$PROJECT_ERROR_FILE" >&2
+  fi
+  rm -f "$PROJECT_ERROR_FILE"
   exit 1
 fi
+rm -f "$PROJECT_ERROR_FILE"
 
-echo "[CHECK] GCP preflight OK for project=$PROJECT_ID zone=$ZONE account=$ACCOUNT"
+echo "[CHECK] GCP preflight OK for project=$PROJECT_ID zone=$ZONE account=$ACCOUNT active_project=${ACTIVE_PROJECT:-<unset>}"
