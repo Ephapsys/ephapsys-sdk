@@ -3207,15 +3207,19 @@ class TrustedAgent:
         max_new_tokens = int(
             generation_cfg.get("max_new_tokens", model_cfg.get("max_new_tokens", os.getenv("AOC_MAX_NEW_TOKENS", "96")))
         )
-        temperature = float(generation_cfg.get("temperature", model_cfg.get("temperature", 0.7)))
-        top_p = float(generation_cfg.get("top_p", model_cfg.get("top_p", 0.9)))
+        temperature = float(
+            generation_cfg.get("temperature", model_cfg.get("temperature", os.getenv("AOC_LANGUAGE_TEMPERATURE", "0.7")))
+        )
+        top_p = float(generation_cfg.get("top_p", model_cfg.get("top_p", os.getenv("AOC_LANGUAGE_TOP_P", "0.9"))))
         repetition_penalty = float(
             generation_cfg.get("repetition_penalty", model_cfg.get("repetition_penalty", 1.1))
         )
         no_repeat_ngram_size = int(
             generation_cfg.get("no_repeat_ngram_size", model_cfg.get("no_repeat_ngram_size", 3))
         )
-        do_sample = str(generation_cfg.get("do_sample", model_cfg.get("do_sample", "1"))).strip().lower() not in (
+        do_sample = str(
+            generation_cfg.get("do_sample", model_cfg.get("do_sample", os.getenv("AOC_LANGUAGE_DO_SAMPLE", "1")))
+        ).strip().lower() not in (
             "0",
             "false",
             "no",
