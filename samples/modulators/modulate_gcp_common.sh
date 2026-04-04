@@ -360,7 +360,8 @@ gcloud compute scp --project="$PROJECT_ID" "$TEMP_SRC/common/modulate_local_comm
 gcloud compute scp --project="$PROJECT_ID" "$TEMP_SRC/common/requirements.gcp.txt" "$INSTANCE_NAME:$REMOTE_BASE_DIR/requirements.gcp.txt" --zone="$ZONE"
 gcloud compute scp --project="$PROJECT_ID" "$MODULATOR_DIR/.env" "$INSTANCE_NAME:$REMOTE_DIR/.env" --zone="$ZONE"
 
-case "${SDK_PACKAGE_SOURCE,,}" in
+SDK_PACKAGE_SOURCE_LC="$(printf '%s' "$SDK_PACKAGE_SOURCE" | tr '[:upper:]' '[:lower:]')"
+case "$SDK_PACKAGE_SOURCE_LC" in
   pypi)
     REMOTE_PIP_INSTALL=$'python3 -m venv ~/.venvs/ephapsys-modulator\nsource ~/.venvs/ephapsys-modulator/bin/activate\npython -m pip install --upgrade pip >/dev/null\npython -m pip install "ephapsys[modulation,audio,vision,embedding,eval]=='"$SDK_VERSION"'" >/dev/null\npython -m pip install -r '"$REMOTE_BASE_DIR"'/requirements.gcp.txt >/dev/null\nif [ -f '"$REMOTE_DIR"'/requirements.txt ]; then python -m pip install -r '"$REMOTE_DIR"'/requirements.txt >/dev/null; fi'
     ;;

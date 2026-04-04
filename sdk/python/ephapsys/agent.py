@@ -2618,6 +2618,34 @@ class TrustedAgent:
         except Exception:
             return "cpu"
 
+    def _normalize_model_dtype(self, model: Any):
+        try:
+            import torch
+        except Exception:
+            return model
+
+        device = self._device()
+        model = model.to(device)
+        if device != "cuda":
+            return model
+
+        floating_dtypes = []
+        for tensor in list(model.parameters()) + list(model.buffers()):
+            if getattr(tensor, "is_floating_point", lambda: False)():
+                floating_dtypes.append(tensor.dtype)
+
+        if not floating_dtypes:
+            return model
+
+        if any(dtype == torch.bfloat16 for dtype in floating_dtypes):
+            target_dtype = torch.bfloat16
+        elif any(dtype == torch.float16 for dtype in floating_dtypes):
+            target_dtype = torch.float16
+        else:
+            target_dtype = torch.float32
+
+        return model.to(device=device, dtype=target_dtype)
+
     def _extract_geo(self, input_data: Any) -> Tuple[Optional[float], Optional[float]]:
         lat = lon = None
         try:
@@ -3125,7 +3153,7 @@ class TrustedAgent:
                     logger.debug("[SDK][Language] Missing keys after load: %s", missing_keys)
                 if unexpected_keys:
                     logger.debug("[SDK][Language] Unexpected keys after load: %s", unexpected_keys)
-                model.to(self._device())
+                model = self._normalize_model_dtype(model)
             else:
                 if state_dict and not can_init_from_config:
                     logger.debug(
@@ -3143,9 +3171,11 @@ class TrustedAgent:
                         model_path,
                     )
                 with self._suppress_transformers_warnings():
-                    model = model_cls.from_pretrained(model_path, config=cfg).to(self._device())
+                    model = model_cls.from_pretrained(model_path, config=cfg)
+                model = self._normalize_model_dtype(model)
 
             self._apply_ecm_if_available(model, runtime)
+            model = self._normalize_model_dtype(model)
             runtime["_language_tokenizer"] = tok
             runtime["_language_config"] = cfg
             runtime["_language_model"] = model
