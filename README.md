@@ -50,24 +50,48 @@ Choose the profile by workload:
 | Modulators with full evaluation/report stack | `pip install "ephapsys[all]"` |
 
 ## Quickstart (Python)
+
+### Modulation (pre-deployment)
+
+Use `ModulatorClient` to fine-tune models with ephaptic coupling before deployment.
+
 ```python
-from ephapsys import TrustedAgent
 from ephapsys.modulation import ModulatorClient
 
-agent = TrustedAgent(
-    agent_id="agent_demo",
-    api_base="https://api.ephapsys.com",
+mod = ModulatorClient.from_env()
+
+# Start a modulation job with EC-ANN variant
+job = mod.start_job(
+    model_template_id="google/gemma-2b",
+    variant="ec-ann",
+    search={"lr": [1e-4, 5e-5]},
+    kpi={"accuracy": "max"}
 )
 
-agent.verify()  # fail-closed checks (certs, digests, leases, host binding)
+# Evaluate and report metrics
+mod.evaluate_and_report(
+    job_id=job["job_id"],
+    model_path="./out/modulated",
+    metrics=["mmlu"],
+    stage="modulated"
+)
+```
 
-client = ModulatorClient(base_url=agent.api_base, signer=agent.signer)
+### Runtime (deployment)
+
+Use `TrustedAgent` to deploy and run agents with fail-closed governance.
+
+```python
+from ephapsys import TrustedAgent
+
+agent = TrustedAgent.from_env()
+agent.verify()                          # fail-closed: certs, digests, keys
+agent.personalize(anchor="tpm")         # bind to hardware (or "none" for dev)
+agent.prepare_runtime()                 # download and verify modulated models
 
 with agent.session(lease_seconds=1800):
-    # guard, then run your inference or modulation workflow
-    if not agent.is_enabled():
-        raise RuntimeError("Agent disabled by policy")
-    # ... run your model via agent.wrap(model) and your inference code ...
+    result = agent.run("What is ephaptic coupling?", model_kind="language")
+    print(result)
 ```
 
 ## Quickstart (CLI)
