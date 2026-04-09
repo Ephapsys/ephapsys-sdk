@@ -131,36 +131,19 @@ AOC_GGUF_MAX_NEW_TOKENS=256
 ```
 
 ## Samples
-- See `samples/agents/helloworld` for a minimal chatbot agent.
-- See `samples/agents/robot` for a full multi-modal reference agent.
 
-Fastest local HelloWorld path from this repo:
+Samples have moved to a dedicated repo: [ephapsys-samples](https://github.com/Ephapsys/ephapsys-samples).
+
+- See `agents/helloworld` for a minimal chatbot agent.
+<!-- - See `agents/robot` for a full multi-modal reference agent. -->
+
+Fastest local HelloWorld path:
 
 ```bash
-cd samples/agents/helloworld
+git clone https://github.com/Ephapsys/ephapsys-samples.git
+cd ephapsys-samples/agents/helloworld
 ./quickstart.sh
 ```
-
-Fill in `.env` with:
-- `AOC_BASE_URL` (`AOC_API_URL` remains a compatibility alias)
-- `AOC_ORG_ID`
-- `AOC_PROVISIONING_TOKEN`
-- `AOC_MODULATION_TOKEN`
-- leave `HF_TOKEN` commented out unless you need a gated/private Hugging Face repo
-- leave `MODEL_TEMPLATE_ID` and `AGENT_TEMPLATE_ID` blank on first run so `quickstart.sh` can populate them
-
-Notes:
-- `quickstart.sh` creates `.env` from `.env.example` if needed, then stops so you can fill in the required values.
-- on rerun, `quickstart.sh` prefers existing HelloWorld starter templates first and only falls back to `./push.sh --local` if they are missing.
-- `AOC_PROVISIONING_TOKEN` is a secret copied from the AOC UI under Organization -> Tokens. `./push.sh` can write template IDs back into `.env`, but it does not create or refresh provisioning credentials for you.
-- `AOC_MODULATION_TOKEN` is also retrieved from Organization -> Tokens and is only required when you run `./push.sh`.
-- `run.sh --local` is the public local entrypoint and already runs preflight automatically before launch.
-- `run.sh --local` uses the currently installed SDK in your active Python environment. For internal repo development only, set `HELLOWORLD_USE_LOCAL_SDK=1` to install from the local checkout instead.
-- `run_local.sh` still exists as the underlying helper, but `run.sh` is the supported entrypoint.
-- `push.sh` defaults to idempotent publish for the HelloWorld starter path; use `--no-idempotent` if you explicitly want a full modulation run.
-- the default HelloWorld language model is `Qwen/Qwen3.5-0.8B`.
-- On macOS and non-TPM machines, the sample defaults to `PERSONALIZE_ANCHOR=none` for a smoother local dev flow.
-- On Linux with `tpm2-tools` installed, the sample defaults to `PERSONALIZE_ANCHOR=tpm`.
 
 If you are loading configuration from a local `.env` file in custom scripts, install and use `python-dotenv` explicitly:
 

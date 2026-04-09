@@ -15,16 +15,13 @@ The Ephapsys Python SDK — developer tools for building, provisioning, and runn
 ```
 ephapsys-sdk/
 ├── sdk/python/         ← Core SDK library
-├── samples/
-│   ├── agents/         ← Reference agent implementations
-│   │   ├── helloworld/ ← Minimal chatbot agent
-│   │   └── robot/      ← Multimodal reference agent
-│   └── modulators/     ← Fine-tuning examples (language, vision, audio, RL)
 ├── scripts/            ← Build, test, publish automation
 ├── tests/              ← SDK test suite
 ├── LICENSE             ← Apache 2.0
 └── README.md
 ```
+
+> **Samples have moved** to [ephapsys-samples](https://github.com/Ephapsys/ephapsys-samples) (agents + modulators).
 
 ---
 
@@ -128,9 +125,12 @@ pytest tests/
 
 ### Samples
 
-HelloWorld agent:
+Samples have moved to [ephapsys-samples](https://github.com/Ephapsys/ephapsys-samples).
+
 ```bash
-cd samples/agents/helloworld
+# Clone separately:
+git clone https://github.com/Ephapsys/ephapsys-samples.git
+cd ephapsys-samples/agents/helloworld
 cp .env.example .env   # configure AOC URL, agent credentials
 ./run.sh
 ```
@@ -153,4 +153,4 @@ Apache 2.0 — permissive with patent protection clause. See `LICENSE`.
 
 ---
 
-*Last updated: 2026-04-02*
+*Last updated: 2026-04-09*
