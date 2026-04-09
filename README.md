@@ -101,9 +101,6 @@ The Ephapsys SDK comes with a built-in CLI that makes configuring, managing, and
 # Authenticate once; the CLI stores a session in ~/.ephapsys_state/session.json
 ephapsys login --username your_username
 
-# Use staging explicitly when needed
-ephapsys --base-url https://api.staging.ephapsys.ai login
-
 # Register and list models
 ephapsys model register --provider huggingface --ids google/gemma-2b
 ephapsys model list
