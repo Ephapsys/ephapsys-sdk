@@ -44,7 +44,7 @@ Choose the profile by workload:
 |---|---|
 | Lightweight orchestrator/proxy only | `pip install ephapsys` |
 | Agent runtime (HelloWorld language) | `pip install ephapsys` |
-| Agent runtime (Robot multimodal) | `pip install "ephapsys[modulation,audio,vision,embedding]"` + `pip install webrtcvad sounddevice pyaudio` |
+| Agent runtime (multimodal) | `pip install "ephapsys[modulation,audio,vision,embedding]"` |
 | Agent runtime (GGUF / llama.cpp edge CPU) | `pip install ephapsys` + install `llama-cpp-python` or `llama-cli` |
 | Modulators/training scripts | `pip install ephapsys` |
 | Modulators with full evaluation/report stack | `pip install "ephapsys[all]"` |
@@ -135,7 +135,7 @@ AOC_GGUF_MAX_NEW_TOKENS=256
 Samples have moved to a dedicated repo: [ephapsys-samples](https://github.com/Ephapsys/ephapsys-samples).
 
 - See `agents/helloworld` for a minimal chatbot agent.
-<!-- - See `agents/robot` for a full multi-modal reference agent. -->
+
 
 Fastest local HelloWorld path:
 
