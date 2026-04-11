@@ -1907,26 +1907,22 @@ class TrustedAgent:
             return m.group(1)
         return candidate
 
-    def _download_http_with_retry(self, src: str, dst: pathlib.Path) -> str:
+    def _download_http_with_retry(self, src: str, dst: pathlib.Path, progress_cb=None) -> str:
+        """Download a file with retries. If progress_cb is provided, call it with
+        (file_name, bytes_downloaded, total_bytes) instead of printing progress."""
         import urllib.request
         import urllib.error
 
         retries = max(1, int(os.getenv("AOC_DOWNLOAD_RETRIES", "3")))
         timeout_s = float(os.getenv("AOC_DOWNLOAD_TIMEOUT", "60"))
         chunk_size = max(8 * 1024, int(os.getenv("AOC_DOWNLOAD_CHUNK_KB", "256")) * 1024)
-        progress_enabled = os.getenv("AOC_DOWNLOAD_PROGRESS", "1") != "0"
-        inline_progress = progress_enabled and sys.stdout.isatty()
-        progress_step_bytes = max(
-            256 * 1024,
-            int(float(os.getenv("AOC_DOWNLOAD_PROGRESS_STEP_MB", "5")) * 1024 * 1024),
-        )
+        show_builtin_progress = progress_cb is None and os.getenv("AOC_DOWNLOAD_PROGRESS", "1") != "0"
 
         last_exc: Optional[Exception] = None
         for attempt in range(1, retries + 1):
             started = time.time()
             tmp = dst.with_suffix(dst.suffix + ".part")
             downloaded = 0
-            next_progress = progress_step_bytes
             try:
                 req = urllib.request.Request(src, headers={"User-Agent": "ephapsys-sdk/1.0"})
                 with urllib.request.urlopen(req, timeout=timeout_s) as resp, open(tmp, "wb") as f:
@@ -1938,42 +1934,23 @@ class TrustedAgent:
                             break
                         f.write(chunk)
                         downloaded += len(chunk)
-                        if progress_enabled and downloaded >= next_progress:
+                        if progress_cb:
+                            progress_cb(dst.name, downloaded, total)
+                        elif show_builtin_progress and total > 0 and downloaded % (5 * 1024 * 1024) < chunk_size:
                             elapsed = max(0.001, time.time() - started)
                             mbps = (downloaded / (1024 * 1024)) / elapsed
-                            if total > 0:
-                                pct = (downloaded * 100.0) / total
-                                line = (
-                                    f"[SDK][Download] {dst.name}: {pct:.1f}% "
-                                    f"({downloaded}/{total} bytes, {mbps:.2f} MiB/s)"
-                                )
-                            else:
-                                line = (
-                                    f"[SDK][Download] {dst.name}: {downloaded} bytes "
-                                    f"({mbps:.2f} MiB/s)"
-                                )
-                            if inline_progress:
-                                print(f"\r\033[2K{line}", end="", flush=True)
-                            else:
-                                print(line)
-                            next_progress += progress_step_bytes
+                            pct = (downloaded * 100.0) / total
+                            if sys.stdout.isatty():
+                                print(f"\r\033[2K[SDK][Download] {dst.name}: {pct:.1f}% ({mbps:.2f} MiB/s)", end="", flush=True)
 
                 os.replace(tmp, dst)
                 elapsed = max(0.001, time.time() - started)
                 mbps = (downloaded / (1024 * 1024)) / elapsed
-                if inline_progress:
-                    total_mib = downloaded / (1024 * 1024)
-                    print(
-                        f"\r\033[2K[SDK][Download] {dst.name}: complete "
-                        f"({total_mib:.2f} MiB in {elapsed:.2f}s, {mbps:.2f} MiB/s)"
-                    )
-                logger.info(
-                    "[SDK][Download] Completed %s (%.2f MiB in %.2fs, %.2f MiB/s)",
-                    dst.name,
-                    downloaded / (1024 * 1024),
-                    elapsed,
-                    mbps,
-                )
+                if show_builtin_progress and sys.stdout.isatty():
+                    print(f"\r\033[2K[SDK][Download] {dst.name}: complete ({downloaded/(1024*1024):.1f} MiB in {elapsed:.1f}s, {mbps:.1f} MiB/s)")
+                elif progress_cb:
+                    progress_cb(dst.name, downloaded, total)  # final callback
+                logger.info("[SDK][Download] Completed %s (%.2f MiB in %.2fs, %.2f MiB/s)", dst.name, downloaded/(1024*1024), elapsed, mbps)
                 return str(dst)
             except Exception as exc:
                 last_exc = exc
@@ -1999,15 +1976,42 @@ class TrustedAgent:
 
         raise RuntimeError(f"Download failed for {src}: {last_exc}") from last_exc
 
+    def _fetch_signed_artifact_urls(self, model_id: str) -> Dict[str, Dict[str, Any]]:
+        """Fetch signed GCS URLs for model artifacts from the backend."""
+        import requests
+        try:
+            url = f"{self.api_base}/models/{model_id}/artifact-urls"
+            headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
+            resp = requests.get(url, headers=headers, timeout=15, verify=self.verify_ssl)
+            if resp.ok:
+                data = resp.json()
+                if data.get("source") == "gcs" and data.get("artifacts"):
+                    return {a["name"]: {"url": a["url"], "size": a.get("size", 0)} for a in data["artifacts"]}
+        except Exception as e:
+            logger.debug("[SDK] Signed URL fetch failed (will use direct download): %s", e)
+        return {}
+
     def _prepare_artifacts_parallel(self, model_id: str, artifacts: Dict[str, Dict[str, Any]], model_dir: pathlib.Path) -> Dict[str, str]:
         """
         Download/validate artifacts for a model with bounded parallelism.
         Returns {artifact_name: local_path}
         """
         workers = max(1, int(os.getenv("AOC_DOWNLOAD_WORKERS", "4")))
+
+        # Try to get fast GCS signed URLs
+        signed_urls = self._fetch_signed_artifact_urls(model_id)
+
         jobs: List[Tuple[str, str, str, pathlib.Path]] = []
+        self._total_download_bytes = 0
+        self._downloaded_bytes = 0
         for name, meta in artifacts.items():
-            url = meta.get("url") or meta.get("storage_path")
+            fname_key = self._normalize_artifact_filename(name, meta.get("url") or meta.get("storage_path") or name)
+            # Prefer signed GCS URL if available
+            if fname_key in signed_urls:
+                url = signed_urls[fname_key]["url"]
+                self._total_download_bytes += signed_urls[fname_key].get("size", 0)
+            else:
+                url = meta.get("url") or meta.get("storage_path")
             if not url:
                 continue
             sha = (meta.get("sha256") or "").removeprefix("sha256:")
@@ -2015,13 +2019,30 @@ class TrustedAgent:
             dst = model_dir / fname
             jobs.append((name, url, sha, dst))
 
+        def _progress_cb(file_name, bytes_dl, total):
+            """Aggregate progress across all artifact downloads."""
+            import threading
+            if not hasattr(self, "_dl_lock"):
+                self._dl_lock = threading.Lock()
+            # We track incremental progress
+            key = f"_prev_{file_name}"
+            with self._dl_lock:
+                prev = getattr(self, key, 0)
+                self._downloaded_bytes += (bytes_dl - prev)
+                setattr(self, key, bytes_dl)
+            if hasattr(self, "_runtime_progress_cb") and self._runtime_progress_cb:
+                self._runtime_progress_cb(self._downloaded_bytes, self._total_download_bytes)
+
         def _fetch(job: Tuple[str, str, str, pathlib.Path]) -> Tuple[str, str]:
             name, url, sha, dst = job
             if not dst.exists():
                 logger.debug("[SDK] Downloading %s:%s → %s", model_id, name, dst)
-                self._download(url, dst)
+                self._download(url, dst, progress_cb=_progress_cb if hasattr(self, '_runtime_progress_cb') and self._runtime_progress_cb else None)
             else:
                 logger.debug("[SDK] Cache hit %s:%s → %s", model_id, name, dst)
+                # Count cached file as already downloaded
+                if dst.exists():
+                    self._downloaded_bytes += dst.stat().st_size
             if sha:
                 calc = sha256_file(str(dst))
                 if calc.lower() != sha.lower():
@@ -2052,7 +2073,7 @@ class TrustedAgent:
                     ) from exc
         return local_paths
 
-    def _download(self, src: str, dst: pathlib.Path) -> str:
+    def _download(self, src: str, dst: pathlib.Path, progress_cb=None) -> str:
         """
         Download or copy an artifact to the local cache.
         Returns the final path.
@@ -2062,7 +2083,7 @@ class TrustedAgent:
 
         _mkdir(dst.parent)
         if _is_http(src):
-            return self._download_http_with_retry(src, dst)
+            return self._download_http_with_retry(src, dst, progress_cb=progress_cb)
         else:
             if not os.path.exists(src):
                 raise RuntimeError(f"Artifact source not found: {src}")
@@ -2272,7 +2293,7 @@ class TrustedAgent:
         # If we get here, the key hasn't been generated yet; let evidence path create it.
         raise FileNotFoundError(f"KEM private key not found at {priv_p}")
 
-    def prepare_runtime(self, force: bool = False) -> Dict[str, Dict[str, Any]]:
+    def prepare_runtime(self, force: bool = False, progress_cb=None) -> Dict[str, Dict[str, Any]]:
         """
         Prepare runtime for all models (cached per agent instance):
           - fetch manifest from backend
@@ -2280,8 +2301,13 @@ class TrustedAgent:
           - register each model by kind (one per kind)
         Returns: {kind: {"model_path": <dir>, "artifacts": {...}}}
         pass force=True to refresh the cached runtimes.
+        progress_cb: optional callback(bytes_downloaded, total_bytes) for download progress.
         """
-        runtimes = self._ensure_runtime(force=force)
+        self._runtime_progress_cb = progress_cb
+        try:
+            runtimes = self._ensure_runtime(force=force)
+        finally:
+            self._runtime_progress_cb = None
         return {kind: dict(paths) for kind, paths in runtimes.items()}
 
     def _ensure_runtime(self, force: bool = False) -> Dict[str, Dict[str, Any]]:
