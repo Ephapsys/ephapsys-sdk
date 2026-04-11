@@ -42,3 +42,4 @@ samples/**/results/
 samples/**/tests/
 dist/
 build/
+scripts/venvs/
