@@ -2012,6 +2012,7 @@ class TrustedAgent:
                 self._total_download_bytes += signed_urls[fname_key].get("size", 0)
             else:
                 url = meta.get("url") or meta.get("storage_path")
+                self._total_download_bytes += int(meta.get("size") or 0)
             if not url:
                 continue
             sha = (meta.get("sha256") or "").removeprefix("sha256:")
@@ -2019,25 +2020,25 @@ class TrustedAgent:
             dst = model_dir / fname
             jobs.append((name, url, sha, dst))
 
+        import threading
+        _dl_lock = threading.Lock()
+        _prev_map = {}
+
         def _progress_cb(file_name, bytes_dl, total):
             """Aggregate progress across all artifact downloads."""
-            import threading
-            if not hasattr(self, "_dl_lock"):
-                self._dl_lock = threading.Lock()
-            # We track incremental progress
-            key = f"_prev_{file_name}"
-            with self._dl_lock:
-                prev = getattr(self, key, 0)
+            with _dl_lock:
+                prev = _prev_map.get(file_name, 0)
                 self._downloaded_bytes += (bytes_dl - prev)
-                setattr(self, key, bytes_dl)
-            if hasattr(self, "_runtime_progress_cb") and self._runtime_progress_cb:
-                self._runtime_progress_cb(self._downloaded_bytes, self._total_download_bytes)
+                _prev_map[file_name] = bytes_dl
+            cb = getattr(self, "_runtime_progress_cb", None)
+            if cb:
+                cb(self._downloaded_bytes, self._total_download_bytes)
 
         def _fetch(job: Tuple[str, str, str, pathlib.Path]) -> Tuple[str, str]:
             name, url, sha, dst = job
             if not dst.exists():
                 logger.debug("[SDK] Downloading %s:%s → %s", model_id, name, dst)
-                self._download(url, dst, progress_cb=_progress_cb if hasattr(self, '_runtime_progress_cb') and self._runtime_progress_cb else None)
+                self._download(url, dst, progress_cb=_progress_cb if getattr(self, '_runtime_progress_cb', None) else None)
             else:
                 logger.debug("[SDK] Cache hit %s:%s → %s", model_id, name, dst)
                 # Count cached file as already downloaded
