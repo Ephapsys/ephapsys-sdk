@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, Iterable, Optional
-import os, json, hashlib, requests, torch
+import os, json, hashlib, requests, torch, logging
 from ephapsys.ecm import inject_ecm
+
+_log = logging.getLogger("ephapsys.modulation")
+_debug = os.getenv("EPHAPSYS_DEBUG", "0") == "1"
 
 # ------------------------------------------------------------
 # ModulatorClient: AOC-driven modulation on Model Templates
@@ -36,14 +39,14 @@ class ModulatorClient:
         if self.api_key:
             # print(f"[DEBUG] Using Bearer token (first 10 chars): {self.api_key[:10]}...")
             return {"Authorization": f"Bearer {self.api_key}"}
-        print("[DEBUG] No API key set, making unauthenticated request")
+        if _debug: print("[DEBUG] No API key set, making unauthenticated request")
         return {}
 
     # ------------------ Template & Job Setup ------------------
     def get_template_or_die(self, template_id: str) -> Dict[str, Any]:
         """Fetch template doc from /models/{id} (UI API)."""
         url = f"{self.base_url}/models/{template_id}"
-        print(f"[DEBUG] GET {url}")
+        if _debug: print(f"[DEBUG] GET {url}")
         resp = requests.get(url, headers=self._auth())
         if not resp.ok:
             raise RuntimeError(
@@ -270,7 +273,7 @@ class ModulatorClient:
 
     def download_and_extract_model(self, model_id: str, outdir: str) -> str:
         url = f"{self.base_url}/models/{model_id}/download"
-        print(f"[DEBUG] Downloading snapshot from {url}")
+        if _debug: print(f"[DEBUG] Downloading snapshot from {url}")
         resp = requests.get(url, headers=self._auth(), stream=True)
         if not resp.ok:
             raise RuntimeError(f"Failed to download snapshot: {resp.status_code} {resp.text}")
@@ -329,11 +332,11 @@ class ModulatorClient:
     ):
 
         # === DEBUG LOGGING (temporary instrumentation) ===
-        print(f"[DEBUG][CERTIFY] Starting finalize_and_certify for model={model_template_id}, job_id={job_id}")
-        print(f"[DEBUG][CERTIFY] Incoming metrics dict type={type(metrics)}, keys={list(metrics.keys()) if isinstance(metrics, dict) else 'N/A'}")
-        print(f"[DEBUG][CERTIFY] all_metrics length={len(all_metrics) if all_metrics else 0}")
-        print(f"[DEBUG][CERTIFY] baseline_metrics type={type(baseline_metrics)}")
-        print(f"[DEBUG][CERTIFY] exp_config keys={list(exp_config.keys()) if isinstance(exp_config, dict) else 'N/A'}")
+        if _debug: print(f"[DEBUG][CERTIFY] Starting finalize_and_certify for model={model_template_id}, job_id={job_id}")
+        if _debug: print(f"[DEBUG][CERTIFY] Incoming metrics dict type={type(metrics)}, keys={list(metrics.keys()) if isinstance(metrics, dict) else 'N/A'}")
+        if _debug: print(f"[DEBUG][CERTIFY] all_metrics length={len(all_metrics) if all_metrics else 0}")
+        if _debug: print(f"[DEBUG][CERTIFY] baseline_metrics type={type(baseline_metrics)}")
+        if _debug: print(f"[DEBUG][CERTIFY] exp_config keys={list(exp_config.keys()) if isinstance(exp_config, dict) else 'N/A'}")
 
         # --- Do NOT override exp_config if trainer already provided it ---
         if exp_config is None:
@@ -352,7 +355,7 @@ class ModulatorClient:
         # === Compute ECM Λ digest & tensor save ===
         ecm_digest = self.compute_rms_hash(metrics)
 
-        print(f"[DEBUG][CERTIFY] Computed ecm_digest={ecm_digest}")
+        if _debug: print(f"[DEBUG][CERTIFY] Computed ecm_digest={ecm_digest}")
         if not ecm_digest:
             print(f"[WARN][CERTIFY] compute_rms_hash() returned None; metrics={metrics}")
 
