@@ -1894,13 +1894,18 @@ class TrustedAgent:
         Normalize artifact filenames for local runtime loading.
         Handles backend/object-store names like:
           <sha256>-tokenizer.json  -> tokenizer.json
+        Strips query strings from signed URLs.
         Prefers explicit artifact key names when they look like filenames.
         """
         # Prefer explicit artifact name when it already carries a canonical filename.
-        if isinstance(name, str) and "." in name and "/" not in name:
+        if isinstance(name, str) and "." in name and "/" not in name and "?" not in name:
             return name
 
-        candidate = os.path.basename(url or "")
+        # Strip query string from URL (e.g., GCS signed URL params)
+        from urllib.parse import urlparse
+        clean_url = urlparse(url or "").path
+
+        candidate = os.path.basename(clean_url)
         # Strip '<64 hex>-' prefix if present.
         m = re.match(r"^[0-9a-fA-F]{64}-(.+)$", candidate)
         if m:
