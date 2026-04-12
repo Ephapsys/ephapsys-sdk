@@ -1976,19 +1976,27 @@ class TrustedAgent:
 
         raise RuntimeError(f"Download failed for {src}: {last_exc}") from last_exc
 
-    def _fetch_signed_artifact_urls(self, model_id: str) -> Dict[str, Dict[str, Any]]:
-        """Fetch signed GCS URLs for model artifacts from the backend."""
+    def _fetch_signed_artifact_urls(self, model_id: str, entry: Dict[str, Any] = None) -> Dict[str, Dict[str, Any]]:
+        """Fetch signed GCS URLs for model artifacts from the backend.
+        Tries model_id first, then falls back to template_id if available."""
         import requests
-        try:
-            url = f"{self.api_base}/models/{model_id}/artifact-urls"
-            headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
-            resp = requests.get(url, headers=headers, timeout=15, verify=self.verify_ssl)
-            if resp.ok:
-                data = resp.json()
-                if data.get("source") == "gcs" and data.get("artifacts"):
-                    return {a["name"]: {"url": a["url"], "size": a.get("size", 0)} for a in data["artifacts"]}
-        except Exception as e:
-            logger.debug("[SDK] Signed URL fetch failed (will use direct download): %s", e)
+        ids_to_try = [model_id]
+        if entry:
+            tmpl = entry.get("template_id") or entry.get("parent_model_id")
+            if tmpl and str(tmpl) != model_id:
+                ids_to_try.append(str(tmpl))
+        for mid in ids_to_try:
+            try:
+                url = f"{self.api_base}/models/{mid}/artifact-urls"
+                headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
+                resp = requests.get(url, headers=headers, timeout=30, verify=self.verify_ssl)
+                if resp.ok:
+                    data = resp.json()
+                    if data.get("source") == "gcs" and data.get("artifacts"):
+                        logger.info("[SDK] Got %d GCS signed URLs for %s", len(data["artifacts"]), mid)
+                        return {a["name"]: {"url": a["url"], "size": a.get("size", 0)} for a in data["artifacts"]}
+            except Exception as e:
+                logger.debug("[SDK] Signed URL fetch failed for %s: %s", mid, e)
         return {}
 
     def _prepare_artifacts_parallel(self, model_id: str, artifacts: Dict[str, Dict[str, Any]], model_dir: pathlib.Path) -> Dict[str, str]:
@@ -1998,8 +2006,8 @@ class TrustedAgent:
         """
         workers = max(1, int(os.getenv("AOC_DOWNLOAD_WORKERS", "4")))
 
-        # Try to get fast GCS signed URLs
-        signed_urls = self._fetch_signed_artifact_urls(model_id)
+        # Use pre-fetched GCS signed URLs if available
+        signed_urls = getattr(self, "_signed_urls_cache", None) or self._fetch_signed_artifact_urls(model_id)
 
         jobs: List[Tuple[str, str, str, pathlib.Path]] = []
         self._total_download_bytes = 0
@@ -2395,6 +2403,9 @@ class TrustedAgent:
             arts = entry.get("artifact_urls", {})
             model_dir = self._cache_dir() / mid
             os.makedirs(model_dir, exist_ok=True)
+
+            # Pre-fetch GCS signed URLs for this model
+            self._signed_urls_cache = self._fetch_signed_artifact_urls(mid, entry)
 
             local_paths: Dict[str, Any] = self._prepare_artifacts_parallel(mid, arts, model_dir)
 
