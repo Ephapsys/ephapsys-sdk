@@ -274,16 +274,46 @@ class ModulatorClient:
     def download_and_extract_model(self, model_id: str, outdir: str) -> str:
         url = f"{self.base_url}/models/{model_id}/download"
         if _debug: print(f"[DEBUG] Downloading snapshot from {url}")
-        resp = requests.get(url, headers=self._auth(), stream=True)
+        resp = requests.get(url, headers=self._auth(), stream=True, allow_redirects=True)
         if not resp.ok:
             raise RuntimeError(f"Failed to download snapshot: {resp.status_code} {resp.text}")
         archive_path = os.path.join(outdir, "model_snapshot.zip")
+        total = int(resp.headers.get("content-length", 0))
+        downloaded = 0
+        chunk_size = 1024 * 256  # 256KB chunks for better throughput
+        import sys, time as _dl_time
+        t0 = _dl_time.monotonic()
+        last_print = 0.0
         with open(archive_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk: f.write(chunk)
+            for chunk in resp.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
+                now = _dl_time.monotonic()
+                if now - last_print < 0.5:
+                    continue
+                last_print = now
+                elapsed = now - t0
+                speed = downloaded / max(elapsed, 0.01)
+                if total > 0:
+                    pct = downloaded / total
+                    bar_w = 30
+                    filled = int(bar_w * pct)
+                    bar = "█" * filled + "░" * (bar_w - filled)
+                    eta = (total - downloaded) / max(speed, 1)
+                    sys.stdout.write(
+                        f"\r  [{bar}] {downloaded / 1e6:.0f}MB / {total / 1e6:.0f}MB  "
+                        f"({pct:.0%})  {speed / 1e6:.1f} MB/s  ETA {int(eta)}s   "
+                    )
+                else:
+                    sys.stdout.write(f"\r  Downloaded {downloaded / 1e6:.1f}MB  ({speed / 1e6:.1f} MB/s)   ")
+                sys.stdout.flush()
+        sys.stdout.write("\n")
         print(f"[INFO] Snapshot downloaded → {archive_path}")
         import zipfile
         extract_dir = os.path.join(outdir, "base_model")
+        print(f"[INFO] Extracting snapshot...")
         with zipfile.ZipFile(archive_path, "r") as z:
             z.extractall(extract_dir)
         print(f"[INFO] Extracted snapshot → {extract_dir}")
