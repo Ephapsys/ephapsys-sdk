@@ -1162,7 +1162,14 @@ class ModulatorClient:
         loss_vals, ppl_vals = [], []
 
         # --- Load dataset ---
-        ds = load_dataset(ds_name, ds_config, split=ds_split)
+        if ds_name and os.path.isfile(ds_name):
+            # Local file (JSONL/JSON) — load directly
+            ds = load_dataset("json", data_files=ds_name, split="train")
+        elif ds_config and os.path.isfile(ds_config):
+            # Config is a file path (alternative convention)
+            ds = load_dataset("json", data_files=ds_config, split="train")
+        else:
+            ds = load_dataset(ds_name, ds_config, split=ds_split)
 
         # --- Detect architecture type ---
         model_type = getattr(model.config, "model_type", "")
