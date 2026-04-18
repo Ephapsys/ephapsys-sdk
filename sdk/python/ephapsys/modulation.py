@@ -1162,12 +1162,14 @@ class ModulatorClient:
         loss_vals, ppl_vals = [], []
 
         # --- Load dataset ---
-        if ds_name and os.path.isfile(ds_name):
+        _ds_name = os.path.expanduser(ds_name) if ds_name else ds_name
+        _ds_config = os.path.expanduser(ds_config) if ds_config else ds_config
+        if _ds_name and os.path.isfile(_ds_name):
             # Local file (JSONL/JSON) — load directly
-            ds = load_dataset("json", data_files=ds_name, split="train")
-        elif ds_config and os.path.isfile(ds_config):
+            ds = load_dataset("json", data_files=_ds_name, split="train")
+        elif _ds_config and os.path.isfile(_ds_config):
             # Config is a file path (alternative convention)
-            ds = load_dataset("json", data_files=ds_config, split="train")
+            ds = load_dataset("json", data_files=_ds_config, split="train")
         else:
             ds = load_dataset(ds_name, ds_config, split=ds_split)
 
