@@ -2513,7 +2513,7 @@ class TrustedAgent:
         return runtimes
 
 
-    def run(self, input_data: Any, model_kind: str) -> Any:
+    def run(self, input_data: Any, model_kind: str, raw_detections: bool = False) -> Any:
         """
         Secure inference entrypoint.
         Loads the model runtime (with ephaptic coupling applied if present)
@@ -2565,7 +2565,7 @@ class TrustedAgent:
             if mode == "image_gen":
                 result = self._run_vision_generate(rt, input_data)
             else:
-                result = self._run_vision(rt, input_data)
+                result = self._run_vision(rt, input_data, raw_detections=raw_detections)
         elif kind == "world":
             result = self._run_world(rt, input_data)
         elif kind == "tts":
@@ -3318,7 +3318,7 @@ class TrustedAgent:
 
 
     # --- Vision (image classification) ---
-    def _run_vision(self, runtime: Dict[str, Any], image_input: Any) -> str:
+    def _run_vision(self, runtime: Dict[str, Any], image_input: Any, raw_detections: bool = False) -> Any:
         """
         Runs a vision model with policy enforcement.
         """
@@ -3351,6 +3351,7 @@ class TrustedAgent:
         inputs = processor(images=image_input, return_tensors="pt").to(self._device())
         config = AutoConfig.from_pretrained(model_path)
 
+        _yolos_detections = None
         if getattr(config, "model_type", "") == "yolos":
             model = AutoModelForObjectDetection.from_pretrained(model_path)
             self._apply_ecm_if_available(model, runtime)
@@ -3381,6 +3382,21 @@ class TrustedAgent:
                 result = ", ".join(top)
             else:
                 result = "no objects detected"
+            if raw_detections:
+                frame_size = [image_input.size[0], image_input.size[1]]
+                _yolos_detections = []
+                for label_id, score, box in zip(
+                    detections.get("labels", []),
+                    detections.get("scores", []),
+                    detections.get("boxes", []),
+                ):
+                    label_name = model.config.id2label.get(int(label_id), str(int(label_id)))
+                    _yolos_detections.append({
+                        "label": label_name,
+                        "score": float(score),
+                        "box": [float(box[0]), float(box[1]), float(box[2]), float(box[3])],
+                        "frame_size": frame_size,
+                    })
         else:
             model = AutoModelForImageClassification.from_pretrained(model_path)
             self._apply_ecm_if_available(model, runtime)
@@ -3405,6 +3421,13 @@ class TrustedAgent:
             logger.info("Vision input policies applied: %s", in_policies)
         if out_policies:
             logger.info("Vision output policies applied: %s", out_policies)
+
+        if raw_detections and _yolos_detections is not None:
+            allowed_labels = set(
+                l.strip().lower() for l in guard_output.split(",")
+            )
+            return [d for d in _yolos_detections if d["label"].lower() in allowed_labels]
+
         return guard_output
 
     def _run_vision_generate(self, runtime: Dict[str, Any], text_prompt: str):
