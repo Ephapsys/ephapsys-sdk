@@ -1865,3 +1865,71 @@ class ModulatorClient:
             last = {"step": ep + 1, "total": episodes, **metrics}
             yield last
         return last or {"reward": 0.0, "success_rate": 0.0}
+
+
+    def compute_world_metrics_stream(
+        self, model, processor, model_id: str,
+        ds_name: str = "kinetics700",
+        ds_config: str = "default",
+        ds_split: str = "test[:100]",
+        steps: int = 50,
+        num_frames: int = 16,
+    ):
+        """
+        Streaming evaluation for world/video models (e.g. V-JEPA 2).
+
+        Loads video clips from a dataset, processes them through the model's
+        video processor, and computes top-1 and top-5 accuracy over action
+        classification logits.
+
+        Yields {"step", "total", "accuracy", "top5_accuracy"} per clip.
+        """
+        from datasets import load_dataset
+
+        device = next(model.parameters()).device
+        ds = load_dataset(ds_name, ds_config, split=ds_split)
+        model.eval()
+
+        correct_top1, correct_top5, total = 0, 0, 0
+        last = None
+
+        for i, sample in enumerate(ds):
+            if i >= steps:
+                break
+
+            video = sample.get("video")
+            if video is None:
+                continue
+
+            label = sample.get("label", -1)
+
+            try:
+                inputs = processor(video, return_tensors="pt").to(device)
+            except Exception as e:
+                _log.warning("Failed to process video clip %d: %s", i, e)
+                continue
+
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
+                probs = logits.softmax(dim=-1)
+
+                pred = probs.argmax(dim=-1).item()
+                top1_correct = int(pred == label)
+
+                top5_preds = probs.topk(min(5, probs.size(-1)), dim=-1).indices[0].tolist()
+                top5_correct = int(label in top5_preds)
+
+            correct_top1 += top1_correct
+            correct_top5 += top5_correct
+            total += 1
+
+            metrics = {
+                "accuracy": correct_top1 / total,
+                "top5_accuracy": correct_top5 / total,
+            }
+            self._report_model_metrics(model_id, metrics, step=i + 1)
+            last = {"step": i + 1, "total": steps, **metrics}
+            yield last
+
+        return last or {"accuracy": 0.0, "top5_accuracy": 0.0}
