@@ -7,7 +7,13 @@
 # ephapsys/__init__.py
 from .agent import TrustedAgent
 
-__all__ = ["TrustedAgent", "ModulatorClient", "A2AClient"]
+__all__ = [
+    "TrustedAgent",
+    "ModulatorClient",
+    "A2AClient",
+    "compute_indispensability_loss",
+    "run_ablation_probe",
+]
 
 
 def __getattr__(name):
@@ -23,4 +29,10 @@ def __getattr__(name):
     if name == "A2AClient":
         from .a2a import A2AClient as _A2AClient
         return _A2AClient
+    if name == "compute_indispensability_loss":
+        from .modulation import compute_indispensability_loss as _fn
+        return _fn
+    if name == "run_ablation_probe":
+        from .modulation import run_ablation_probe as _fn
+        return _fn
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
