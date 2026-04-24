@@ -1,10 +1,205 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, Iterable, Optional
 import os, json, hashlib, requests, torch, logging
+import torch.nn as nn
 from ephapsys.ecm import inject_ecm
 
 _log = logging.getLogger("ephapsys.modulation")
 _debug = os.getenv("EPHAPSYS_DEBUG", "0") == "1"
+
+
+# ------------------------------------------------------------
+# Indispensability: Family D loss + ablation probe
+# ------------------------------------------------------------
+
+def compute_indispensability_loss(
+    model: nn.Module,
+    inputs: Dict[str, torch.Tensor],
+    alpha: float = 10.0,
+    beta: float = 0.01,
+) -> Dict[str, torch.Tensor]:
+    """
+    Compute Family D indispensability loss components.
+
+    Runs the model twice — once with ECM hooks active, once without — and
+    measures hidden-state divergence. The resulting loss terms encourage the
+    base weights W to structurally depend on Λ so that removing Λ destroys
+    model coherence.
+
+    Works with any model kind (language, vision, audio, RL, embedding, etc.)
+    as long as the model supports ``output_hidden_states=True``.
+
+    Args:
+        model: PyTorch model with ECM hooks already injected via ``inject_ecm()``.
+        inputs: Tokenized/processed inputs (dict of tensors on the correct device).
+        alpha: Weight for indispensability loss (higher = stronger coupling).
+        beta: Weight for stability loss (prevents Λ norm explosion).
+
+    Returns:
+        Dict with keys:
+            ``task_loss``: Standard forward-pass loss (from model's built-in head).
+            ``indispensability_loss``: Relative hidden-state divergence (higher = more load-bearing).
+            ``stability_loss``: Λ Frobenius norm regularizer.
+            ``total_loss``: ``task_loss - alpha * indispensability_loss + beta * stability_loss``.
+            ``separation``: Raw MSE between ECM-active and ECM-removed hidden states.
+    """
+    # --- Step 1: Forward WITHOUT ECM (temporarily disable hooks) ---
+    saved_hooks: Dict[str, dict] = {}
+    for name, mod in model.named_modules():
+        if hasattr(mod, '_forward_hooks') and mod._forward_hooks:
+            saved_hooks[name] = dict(mod._forward_hooks)
+            mod._forward_hooks.clear()
+
+    with torch.no_grad():
+        outputs_no_ecm = model(**inputs, output_hidden_states=True)
+        h_base = outputs_no_ecm.hidden_states[-1].detach()
+
+    # Restore hooks
+    for name, mod in model.named_modules():
+        if name in saved_hooks:
+            mod._forward_hooks.update(saved_hooks[name])
+
+    # --- Step 2: Forward WITH ECM ---
+    outputs_ecm = model(**inputs, output_hidden_states=True)
+    h_ecm = outputs_ecm.hidden_states[-1]
+
+    # Task loss (from model head)
+    task_loss = outputs_ecm.loss if outputs_ecm.loss is not None else torch.tensor(0.0, device=h_ecm.device)
+
+    # Indispensability = relative hidden-state divergence
+    diff = (h_ecm - h_base).pow(2).mean()
+    base_norm = h_base.pow(2).mean().clamp(min=1e-8)
+    indispensability_loss = diff / base_norm
+
+    # Stability = Λ Frobenius norm
+    stability_loss = torch.tensor(0.0, device=h_ecm.device)
+    for param_name, param in model.named_parameters():
+        if "lambda_ecm" in param_name:
+            stability_loss = param.pow(2).mean()
+            break
+
+    total_loss = task_loss - alpha * indispensability_loss + beta * stability_loss
+
+    return {
+        "task_loss": task_loss,
+        "indispensability_loss": indispensability_loss,
+        "stability_loss": stability_loss,
+        "total_loss": total_loss,
+        "separation": diff,
+    }
+
+
+def run_ablation_probe(
+    model: nn.Module,
+    inputs: Dict[str, torch.Tensor],
+    tokenizer=None,
+) -> Dict[str, float]:
+    """
+    Run a quick ablation probe: compare model output WITH vs WITHOUT ECM.
+
+    Measures perplexity, KL divergence, and accuracy in both conditions.
+    Returns a dict of metrics suitable for reporting to AOC.
+
+    Works with any model kind that outputs logits and supports
+    ``output_hidden_states=True``.
+
+    Args:
+        model: PyTorch model with ECM hooks injected.
+        inputs: Tokenized/processed inputs.
+        tokenizer: Optional tokenizer (used for perplexity calculation on language models).
+
+    Returns:
+        Dict with keys: ``authorized_ppl``, ``unauthorized_ppl``,
+        ``separation_ratio``, ``kl_divergence``, ``authorized_accuracy``,
+        ``unauthorized_accuracy``, ``governance_strength``.
+    """
+    import math
+
+    device = next(model.parameters()).device
+
+    # --- WITH ECM (authorized) ---
+    with torch.no_grad():
+        out_auth = model(**inputs)
+    logits_auth = out_auth.logits if hasattr(out_auth, 'logits') else out_auth[0]
+
+    # --- WITHOUT ECM (temporarily disable hooks) ---
+    saved_hooks: Dict[str, dict] = {}
+    for name, mod in model.named_modules():
+        if hasattr(mod, '_forward_hooks') and mod._forward_hooks:
+            saved_hooks[name] = dict(mod._forward_hooks)
+            mod._forward_hooks.clear()
+
+    with torch.no_grad():
+        out_unauth = model(**inputs)
+    logits_unauth = out_unauth.logits if hasattr(out_unauth, 'logits') else out_unauth[0]
+
+    # Restore hooks
+    for name, mod in model.named_modules():
+        if name in saved_hooks:
+            mod._forward_hooks.update(saved_hooks[name])
+
+    # --- Compute metrics ---
+    labels = inputs.get("labels", inputs.get("input_ids"))
+
+    # Perplexity (language models with labels)
+    auth_ppl = float('inf')
+    unauth_ppl = float('inf')
+    if labels is not None and logits_auth.dim() == 3:
+        # Shift for causal LM
+        shift_logits_auth = logits_auth[:, :-1, :].contiguous()
+        shift_logits_unauth = logits_unauth[:, :-1, :].contiguous()
+        shift_labels = labels[:, 1:].contiguous()
+
+        loss_fn = nn.CrossEntropyLoss()
+        auth_loss = loss_fn(shift_logits_auth.view(-1, shift_logits_auth.size(-1)), shift_labels.view(-1))
+        unauth_loss = loss_fn(shift_logits_unauth.view(-1, shift_logits_unauth.size(-1)), shift_labels.view(-1))
+
+        auth_ppl = math.exp(min(auth_loss.item(), 50.0))  # cap to prevent overflow
+        unauth_ppl = math.exp(min(unauth_loss.item(), 50.0))
+
+    # KL divergence
+    log_probs_auth = torch.log_softmax(logits_auth, dim=-1)
+    probs_auth = torch.softmax(logits_auth, dim=-1)
+    log_probs_unauth = torch.log_softmax(logits_unauth, dim=-1)
+    kl_div = torch.nn.functional.kl_div(log_probs_unauth, probs_auth, reduction='batchmean', log_target=False)
+    kl_value = min(kl_div.item(), 100.0)  # cap for reporting
+
+    # Accuracy
+    if labels is not None and logits_auth.dim() == 3:
+        preds_auth = logits_auth[:, :-1, :].argmax(dim=-1)
+        preds_unauth = logits_unauth[:, :-1, :].argmax(dim=-1)
+        target = labels[:, 1:]
+        mask = target != -100
+        auth_acc = (preds_auth[mask] == target[mask]).float().mean().item() if mask.any() else 0.0
+        unauth_acc = (preds_unauth[mask] == target[mask]).float().mean().item() if mask.any() else 0.0
+    else:
+        auth_acc = 0.0
+        unauth_acc = 0.0
+
+    # Separation ratio and governance strength
+    separation_ratio = unauth_ppl / max(auth_ppl, 1e-8) if auth_ppl < float('inf') else 0.0
+
+    if separation_ratio > 1_000_000:
+        governance_strength = "critical"
+    elif separation_ratio > 1_000:
+        governance_strength = "high"
+    elif separation_ratio > 10:
+        governance_strength = "moderate"
+    elif separation_ratio > 1.1:
+        governance_strength = "low"
+    else:
+        governance_strength = "none"
+
+    return {
+        "authorized_ppl": round(auth_ppl, 4),
+        "unauthorized_ppl": round(unauth_ppl, 4),
+        "separation_ratio": round(separation_ratio, 4),
+        "kl_divergence": round(kl_value, 4),
+        "authorized_accuracy": round(auth_acc, 4),
+        "unauthorized_accuracy": round(unauth_acc, 4),
+        "governance_strength": governance_strength,
+    }
+
 
 # ------------------------------------------------------------
 # ModulatorClient: AOC-driven modulation on Model Templates
@@ -359,6 +554,7 @@ class ModulatorClient:
         all_metrics: Optional[list] = None,
         baseline_metrics: Optional[dict] = None,
         exp_config: Optional[dict] = None,  # new optional argument for experiment summary
+        indispensability_metrics: Optional[dict] = None,  # ablation probe results
     ):
 
         # === DEBUG LOGGING (temporary instrumentation) ===
@@ -402,6 +598,14 @@ class ModulatorClient:
                 found_lambda = True
                 print(f"[INFO] Saved learned Λ → {ecm_pt_path} (shape={tuple(param.shape)})")
                 break
+
+        # === Save indispensability metrics (if present) ===
+        indisp_path = None
+        if indispensability_metrics:
+            indisp_path = os.path.join(run_dir, "indispensability.json")
+            with open(indisp_path, "w") as f:
+                json.dump(indispensability_metrics, f, indent=2)
+            print(f"[INFO] Saved indispensability metrics → {indisp_path}")
 
         # === Export metrics to CSV ===
         metrics_csv_path = os.path.join(run_dir, "metrics.csv")
@@ -581,6 +785,37 @@ class ModulatorClient:
             #     if plot_loss: f.write(f"- **Loss Comparison:** ![Loss Plot]({os.path.basename(plot_loss)})\n")
             #     if plot_acc: f.write(f"- **Accuracy Comparison:** ![Accuracy Plot]({os.path.basename(plot_acc)})\n")
             #     if plot_ppl: f.write(f"- **Perplexity Comparison:** ![Perplexity Plot]({os.path.basename(plot_ppl)})\n")
+
+            # --- Indispensability / Governance Strength ---
+            if indispensability_metrics:
+                f.write("\n## Governance Strength\n\n")
+                strength = indispensability_metrics.get("governance_strength", "unknown")
+                f.write(f"**Governance Strength Level:** {strength.upper()}\n\n")
+
+                f.write("| Metric | Value |\n")
+                f.write("|:-------|:------|\n")
+
+                indisp_order = [
+                    ("authorized_ppl", "Authorized PPL"),
+                    ("unauthorized_ppl", "Unauthorized PPL"),
+                    ("separation_ratio", "Separation Ratio"),
+                    ("kl_divergence", "KL Divergence"),
+                    ("authorized_accuracy", "Authorized Accuracy"),
+                    ("unauthorized_accuracy", "Unauthorized Accuracy"),
+                ]
+                for key, label in indisp_order:
+                    val = indispensability_metrics.get(key)
+                    if val is None:
+                        continue
+                    if "accuracy" in key:
+                        f.write(f"| {label} | {float(val) * 100:.2f}% |\n")
+                    elif isinstance(val, float) and val > 1e6:
+                        f.write(f"| {label} | {val:,.0f} |\n")
+                    else:
+                        f.write(f"| {label} | {val} |\n")
+
+                f.write(f"\n*Separation ratio = PPL(unauthorized) / PPL(authorized). "
+                        f"Higher separation means stronger governance.*\n\n")
 
             # --- Final Metric Comparison (ordered, consistent with AOC UI) ---
             if baseline_metrics:
@@ -763,6 +998,44 @@ class ModulatorClient:
             #         row[3].text = delta_fmt
             #         row[4].text = f"{pct:+.2f}%"
 
+                # --- Indispensability / Governance Strength (DOCX) ---
+                if indispensability_metrics:
+                    doc.add_heading("Governance Strength", level=1)
+                    strength = indispensability_metrics.get("governance_strength", "unknown")
+                    p = doc.add_paragraph()
+                    run = p.add_run("Governance Strength Level: ")
+                    run.bold = True
+                    p.add_run(strength.upper())
+
+                    indisp_rows = [
+                        ("Authorized PPL", indispensability_metrics.get("authorized_ppl")),
+                        ("Unauthorized PPL", indispensability_metrics.get("unauthorized_ppl")),
+                        ("Separation Ratio", indispensability_metrics.get("separation_ratio")),
+                        ("KL Divergence", indispensability_metrics.get("kl_divergence")),
+                        ("Authorized Accuracy", indispensability_metrics.get("authorized_accuracy")),
+                        ("Unauthorized Accuracy", indispensability_metrics.get("unauthorized_accuracy")),
+                    ]
+                    indisp_rows = [(l, v) for l, v in indisp_rows if v is not None]
+
+                    if indisp_rows:
+                        tbl = doc.add_table(rows=len(indisp_rows) + 1, cols=2)
+                        tbl.style = "Light List"
+                        tbl.rows[0].cells[0].text = "Metric"
+                        tbl.rows[0].cells[1].text = "Value"
+                        for idx, (label, val) in enumerate(indisp_rows, start=1):
+                            tbl.rows[idx].cells[0].text = label
+                            if "Accuracy" in label:
+                                tbl.rows[idx].cells[1].text = f"{float(val) * 100:.2f}%"
+                            elif isinstance(val, float) and val > 1e6:
+                                tbl.rows[idx].cells[1].text = f"{val:,.0f}"
+                            else:
+                                tbl.rows[idx].cells[1].text = str(val)
+
+                    doc.add_paragraph(
+                        "Separation ratio = PPL(unauthorized) / PPL(authorized). "
+                        "Higher separation means stronger governance."
+                    )
+
                 if baseline_metrics:
                     doc.add_heading("Final Metric Comparison", level=1)
 
@@ -868,7 +1141,7 @@ class ModulatorClient:
 
         artifact_paths = [
             metrics_path, ecm_json_path, ecm_pt_path, report_md_path,
-            metrics_csv_path, plot_loss, plot_acc, plot_ppl
+            metrics_csv_path, plot_loss, plot_acc, plot_ppl, indisp_path,
         ]
 
         artifact_paths = [p for p in artifact_paths if p and os.path.exists(p)]
@@ -925,6 +1198,8 @@ class ModulatorClient:
             }
             if exp_config:
                 body["exp_config"] = exp_config
+            if indispensability_metrics:
+                body["indispensability"] = indispensability_metrics
 
             resp = requests.post(url, headers=headers, json=body, timeout=30)
             if resp.ok:
@@ -1590,3 +1865,71 @@ class ModulatorClient:
             last = {"step": ep + 1, "total": episodes, **metrics}
             yield last
         return last or {"reward": 0.0, "success_rate": 0.0}
+
+
+    def compute_world_metrics_stream(
+        self, model, processor, model_id: str,
+        ds_name: str = "kinetics700",
+        ds_config: str = "default",
+        ds_split: str = "test[:100]",
+        steps: int = 50,
+        num_frames: int = 16,
+    ):
+        """
+        Streaming evaluation for world/video models (e.g. V-JEPA 2).
+
+        Loads video clips from a dataset, processes them through the model's
+        video processor, and computes top-1 and top-5 accuracy over action
+        classification logits.
+
+        Yields {"step", "total", "accuracy", "top5_accuracy"} per clip.
+        """
+        from datasets import load_dataset
+
+        device = next(model.parameters()).device
+        ds = load_dataset(ds_name, ds_config, split=ds_split)
+        model.eval()
+
+        correct_top1, correct_top5, total = 0, 0, 0
+        last = None
+
+        for i, sample in enumerate(ds):
+            if i >= steps:
+                break
+
+            video = sample.get("video")
+            if video is None:
+                continue
+
+            label = sample.get("label", -1)
+
+            try:
+                inputs = processor(video, return_tensors="pt").to(device)
+            except Exception as e:
+                _log.warning("Failed to process video clip %d: %s", i, e)
+                continue
+
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
+                probs = logits.softmax(dim=-1)
+
+                pred = probs.argmax(dim=-1).item()
+                top1_correct = int(pred == label)
+
+                top5_preds = probs.topk(min(5, probs.size(-1)), dim=-1).indices[0].tolist()
+                top5_correct = int(label in top5_preds)
+
+            correct_top1 += top1_correct
+            correct_top5 += top5_correct
+            total += 1
+
+            metrics = {
+                "accuracy": correct_top1 / total,
+                "top5_accuracy": correct_top5 / total,
+            }
+            self._report_model_metrics(model_id, metrics, step=i + 1)
+            last = {"step": i + 1, "total": steps, **metrics}
+            yield last
+
+        return last or {"accuracy": 0.0, "top5_accuracy": 0.0}
