@@ -536,3 +536,217 @@ class A2AClient:
             self.ack_message(message_id=message_id, agent_id=agent_id)
         except Exception as exc:
             logger.warning("a2a ack failed for message_id=%s: %s", message_id, exc)
+
+    # -- Clusters -------------------------------------------------------------
+
+    def list_clusters(self, *, agent_id: Optional[str] = None) -> Dict[str, Any]:
+        """List clusters in the current org. Optionally filter by membership."""
+        params: Dict[str, Any] = {}
+        if agent_id:
+            params["agent_id"] = agent_id
+        r = requests.get(
+            f"{self.base_url}/clusters",
+            headers=self._headers(),
+            params=params or None,
+            timeout=self.timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"clusters list failed: {r.status_code} {r.text}")
+        return r.json()
+
+    def get_cluster(self, *, cluster_id: str) -> Dict[str, Any]:
+        r = requests.get(
+            f"{self.base_url}/clusters/{cluster_id}",
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"cluster get failed: {r.status_code} {r.text}")
+        return r.json()
+
+    def create_cluster(
+        self,
+        *,
+        label: str,
+        agent_ids: Optional[List[str]] = None,
+        policy: Optional[Dict[str, Any]] = None,
+        cluster_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"label": label, "agent_ids": list(agent_ids or [])}
+        if cluster_id:
+            body["cluster_id"] = cluster_id
+        if policy is not None:
+            body["policy"] = policy
+        r = requests.post(
+            f"{self.base_url}/clusters",
+            headers=self._headers(),
+            json=body,
+            timeout=self.timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"cluster create failed: {r.status_code} {r.text}")
+        return r.json()
+
+    def update_cluster(
+        self,
+        *,
+        cluster_id: str,
+        label: Optional[str] = None,
+        agent_ids: Optional[List[str]] = None,
+        policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {}
+        if label is not None:
+            body["label"] = label
+        if agent_ids is not None:
+            body["agent_ids"] = list(agent_ids)
+        if policy is not None:
+            body["policy"] = policy
+        r = requests.patch(
+            f"{self.base_url}/clusters/{cluster_id}",
+            headers=self._headers(),
+            json=body,
+            timeout=self.timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"cluster update failed: {r.status_code} {r.text}")
+        return r.json()
+
+    def delete_cluster(self, *, cluster_id: str) -> Dict[str, Any]:
+        r = requests.delete(
+            f"{self.base_url}/clusters/{cluster_id}",
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"cluster delete failed: {r.status_code} {r.text}")
+        return r.json()
+
+    def add_member(self, *, cluster_id: str, agent_id: str) -> Dict[str, Any]:
+        r = requests.post(
+            f"{self.base_url}/clusters/{cluster_id}/members",
+            headers=self._headers(),
+            json={"agent_id": agent_id},
+            timeout=self.timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"cluster add_member failed: {r.status_code} {r.text}")
+        return r.json()
+
+    def remove_member(self, *, cluster_id: str, agent_ref: str) -> Dict[str, Any]:
+        r = requests.delete(
+            f"{self.base_url}/clusters/{cluster_id}/members/{agent_ref}",
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"cluster remove_member failed: {r.status_code} {r.text}")
+        return r.json()
+
+    def join_cluster(self, *, cluster_id: str, agent_id: str) -> Dict[str, Any]:
+        """Semantic alias for :meth:`add_member` from an agent's perspective."""
+        return self.add_member(cluster_id=cluster_id, agent_id=agent_id)
+
+    def leave_cluster(self, *, cluster_id: str, agent_id: str) -> Dict[str, Any]:
+        """Semantic alias for :meth:`remove_member` from an agent's perspective."""
+        return self.remove_member(cluster_id=cluster_id, agent_ref=agent_id)
+
+    def broadcast(
+        self,
+        *,
+        cluster_id: str,
+        from_agent_id: str,
+        payload: Dict[str, Any],
+        message_type: str = "event",
+        correlation_id: Optional[str] = None,
+        ttl_seconds: Optional[int] = None,
+        skip_self: bool = True,
+    ) -> Dict[str, Any]:
+        """Send the same payload to every member of a cluster.
+
+        Returns a per-recipient summary::
+
+            {
+                "cluster_id": str,
+                "sent": int,
+                "failed": int,
+                "results": [
+                    {"agent_id": str, "ok": bool, "message_id": Optional[str], "error": Optional[str]},
+                    ...
+                ]
+            }
+
+        The fan-out is performed client-side as one ``send_message`` per
+        recipient. A failure on one recipient does not abort the others;
+        each result is captured individually.
+        """
+        cluster_payload = self.get_cluster(cluster_id=cluster_id).get("cluster") or {}
+        refs = list(cluster_payload.get("agent_refs") or [])
+        if skip_self:
+            refs = [r for r in refs if r != from_agent_id]
+
+        results: List[Dict[str, Any]] = []
+        sent = 0
+        failed = 0
+        for to_ref in refs:
+            try:
+                resp = self.send_message(
+                    from_agent_id=from_agent_id,
+                    to_agent_id=to_ref,
+                    payload=payload,
+                    message_type=message_type,
+                    correlation_id=correlation_id,
+                    ttl_seconds=ttl_seconds,
+                )
+                msg_id = (resp.get("message") or {}).get("id")
+                results.append({"agent_id": to_ref, "ok": True, "message_id": msg_id, "error": None})
+                sent += 1
+            except Exception as exc:
+                results.append({"agent_id": to_ref, "ok": False, "message_id": None, "error": str(exc)})
+                failed += 1
+
+        return {
+            "cluster_id": cluster_id,
+            "sent": sent,
+            "failed": failed,
+            "results": results,
+        }
+
+    def cluster_info(self, *, cluster_id: str) -> Dict[str, Any]:
+        """Get cluster details enriched with derived per-member health.
+
+        Returns::
+
+            {
+                "cluster": {... cluster doc as returned by get_cluster ...},
+                "members": [{"agent_id": str, "status": str, "state": dict}],
+                "health": {"healthy": int, "degraded": int, "revoked": int, "unknown": int}
+            }
+
+        Status lookups are performed once per member; lookup failures
+        count toward ``unknown`` rather than raising.
+        """
+        cluster = self.get_cluster(cluster_id=cluster_id).get("cluster") or {}
+        refs = list(cluster.get("agent_refs") or [])
+
+        members: List[Dict[str, Any]] = []
+        health = {"healthy": 0, "degraded": 0, "revoked": 0, "unknown": 0}
+        for ref in refs:
+            lookup = self._check_sender_status(ref)
+            if not lookup["ok"]:
+                members.append({"agent_id": ref, "status": "UNKNOWN", "state": {}})
+                health["unknown"] += 1
+                continue
+            status = lookup["status"] or "UNKNOWN"
+            state = lookup["state"] or {}
+            members.append({"agent_id": ref, "status": status, "state": state})
+            if state.get("revoked") or status == "REVOKED":
+                health["revoked"] += 1
+            elif status == "ENABLED":
+                health["healthy"] += 1
+            elif status == "UNKNOWN":
+                health["unknown"] += 1
+            else:
+                health["degraded"] += 1
+
+        return {"cluster": cluster, "members": members, "health": health}
