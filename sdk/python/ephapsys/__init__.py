@@ -11,6 +11,8 @@ __all__ = [
     "TrustedAgent",
     "ModulatorClient",
     "A2AClient",
+    "VerifiedMessage",
+    "MessageJournal",
     "compute_indispensability_loss",
     "run_ablation_probe",
 ]
@@ -29,6 +31,12 @@ def __getattr__(name):
     if name == "A2AClient":
         from .a2a import A2AClient as _A2AClient
         return _A2AClient
+    if name == "VerifiedMessage":
+        from .a2a import VerifiedMessage as _VerifiedMessage
+        return _VerifiedMessage
+    if name == "MessageJournal":
+        from .journal import MessageJournal as _MessageJournal
+        return _MessageJournal
     if name == "compute_indispensability_loss":
         from .modulation import compute_indispensability_loss as _fn
         return _fn

@@ -1,14 +1,7 @@
-import importlib.util
 import hashlib
 import hmac
-from pathlib import Path
 
-
-_A2A_PATH = Path(__file__).parent / "ephapsys" / "a2a.py"
-_SPEC = importlib.util.spec_from_file_location("ephapsys_a2a_module", _A2A_PATH)
-assert _SPEC and _SPEC.loader
-a2a = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(a2a)
+from conftest import a2a
 
 
 class _Resp:
