@@ -162,6 +162,9 @@ def _safety_scan(text: str) -> Tuple[bool, List[str]]:
         r"racial slur",
         r"genocide",
     ]
+    # Also include the prompt-injection signature list so safety_scan
+    # is the single entry point for "is this string suspicious?".
+    cues.extend(PROMPT_INJECTION_PATTERNS)
     # Allow env-provided blocklist patterns
     cues.extend(SAFETY_BLOCKLIST)
     hits = []
