@@ -34,3 +34,4 @@ def _load_submodule(name: str, filename: str):
 _ensure_package()
 journal_mod = _load_submodule("journal", "journal.py")
 a2a = _load_submodule("a2a", "a2a.py")
+agent_mod = _load_submodule("agent", "agent.py")

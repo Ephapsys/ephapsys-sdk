@@ -356,6 +356,84 @@ def _dev_allow_insecure() -> bool:
     return os.getenv("EPHAPSYS_ALLOW_INSECURE_PERSONALIZE", "0") == "1"
 
 
+# ---------- Cluster auto-join ----------
+def _resolve_cluster_join_targets(join_clusters: Optional[List[str]]) -> List[str]:
+    """Resolve which cluster IDs an agent should attempt to join.
+
+    Explicit ``join_clusters`` argument wins. Otherwise the
+    ``EPHAPSYS_AGENT_CLUSTER_IDS`` env var (comma-separated) is read.
+    Returns a de-duplicated list with empty entries dropped.
+    """
+    if join_clusters is not None:
+        seen: Set[str] = set()
+        out: List[str] = []
+        for c in join_clusters:
+            cid = (c or "").strip()
+            if cid and cid not in seen:
+                seen.add(cid)
+                out.append(cid)
+        return out
+
+    raw = os.getenv("EPHAPSYS_AGENT_CLUSTER_IDS", "")
+    seen2: Set[str] = set()
+    out2: List[str] = []
+    for c in raw.split(","):
+        cid = c.strip()
+        if cid and cid not in seen2:
+            seen2.add(cid)
+            out2.append(cid)
+    return out2
+
+
+def _auto_join_clusters(
+    *,
+    api_base: str,
+    api_key: Optional[str],
+    agent_id: Optional[str],
+    cluster_ids: List[str],
+    org_id: str = "",
+) -> Dict[str, bool]:
+    """Best-effort: ensure ``agent_id`` is a member of each listed cluster.
+
+    Returns ``{cluster_id: joined_ok}``. Failures are logged at warning
+    level and never raise, so cluster issues do not block agent startup.
+    Server-side membership add is idempotent.
+    """
+    results: Dict[str, bool] = {}
+    if not cluster_ids:
+        return results
+    if not (api_base and api_key and agent_id):
+        for cid in cluster_ids:
+            results[cid] = False
+            logger.warning(
+                "[SDK][Cluster] Skipping auto-join of %s: missing api_base/api_key/agent_id",
+                cid,
+            )
+        return results
+
+    try:
+        from .a2a import A2AClient
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[SDK][Cluster] A2AClient unavailable; skipping auto-join: %s", exc)
+        return {cid: False for cid in cluster_ids}
+
+    try:
+        client = A2AClient(base_url=api_base, token=api_key, org_id=org_id or None)
+    except Exception as exc:
+        logger.warning("[SDK][Cluster] Could not build A2AClient for auto-join: %s", exc)
+        return {cid: False for cid in cluster_ids}
+
+    for cid in cluster_ids:
+        try:
+            client.join_cluster(cluster_id=cid, agent_id=agent_id)
+            logger.info("[SDK][Cluster] Joined cluster %s as %s", cid, agent_id)
+            results[cid] = True
+        except Exception as exc:
+            logger.warning("[SDK][Cluster] Failed to join cluster %s: %s", cid, exc)
+            results[cid] = False
+    return results
+
+
 # ---------- TrustedAgent ----------
 class TrustedAgent:
     """
@@ -2310,13 +2388,29 @@ class TrustedAgent:
         # If we get here, the key hasn't been generated yet; let evidence path create it.
         raise FileNotFoundError(f"KEM private key not found at {priv_p}")
 
-    def prepare_runtime(self, force: bool = False, progress_cb=None) -> Dict[str, Dict[str, Any]]:
+    def prepare_runtime(
+        self,
+        force: bool = False,
+        progress_cb=None,
+        join_clusters: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Prepare runtime for all models (cached per agent instance):
           - fetch manifest from backend
           - download artifacts into cache
           - register each model by kind (one per kind)
+          - optionally join one or more A2A clusters
+
         Returns: {kind: {"model_path": <dir>, "artifacts": {...}}}
+
+        Cluster auto-join:
+          If ``join_clusters`` is provided, the agent attempts to join
+          each listed cluster (idempotent server-side). When unset, the
+          ``EPHAPSYS_AGENT_CLUSTER_IDS`` environment variable
+          (comma-separated cluster IDs) is consulted. Auto-join is
+          best-effort: failures are logged but never propagate, so a
+          missing or unreachable cluster does not block model preparation.
+
         pass force=True to refresh the cached runtimes.
         progress_cb: optional callback(bytes_downloaded, total_bytes) for download progress.
         """
@@ -2325,6 +2419,17 @@ class TrustedAgent:
             runtimes = self._ensure_runtime(force=force)
         finally:
             self._runtime_progress_cb = None
+
+        cluster_ids = _resolve_cluster_join_targets(join_clusters)
+        if cluster_ids:
+            _auto_join_clusters(
+                api_base=self.api_base,
+                api_key=self.api_key,
+                agent_id=self.agent_id,
+                cluster_ids=cluster_ids,
+                org_id=os.getenv("AOC_ORG_ID", ""),
+            )
+
         return {kind: dict(paths) for kind, paths in runtimes.items()}
 
     def _ensure_runtime(self, force: bool = False) -> Dict[str, Dict[str, Any]]:
