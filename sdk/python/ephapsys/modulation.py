@@ -266,7 +266,34 @@ class ModulatorClient:
     def start_job(self, model_template_id: str, variant: str,
                   search: Dict, kpi: Dict, mode: str = "auto",
                   dataset: Optional[Dict] = None,
-                  approved_params: Optional[Dict] = None) -> Dict:
+                  approved_params: Optional[Dict] = None,
+                  governance_mode: str = "standard") -> Dict:
+        """
+        Start a modulation job on the AOC backend.
+
+        Args:
+            model_template_id: AOC model template public ID.
+            variant: Initial ECM variant ("multiplicative" | "additive").
+            search: Bayesian search config — algo, budget, space.
+            kpi: Optimization targets — list of {name, direction, weight}.
+            mode: "auto" (Bayesian search) or "manual" (approved_params).
+            dataset: Optional dataset descriptor for trials.
+            approved_params: Required when mode="manual".
+            governance_mode: One of:
+                - "standard"      (default) — both variants searchable, no
+                                  extra constraints.
+                - "indispensable" — request that the backend enforce
+                                  indispensability constraints on the search
+                                  space (multiplicative-only, identity-init,
+                                  bounded ε). Use when the modulation must
+                                  produce a model where Λ is genuinely
+                                  load-bearing for governance/security.
+                - "idempotent"    — skip-modulation publish path with
+                                  hardcoded ECM artifacts (fast path for
+                                  development/quickstart).
+                Backend is the policy authority; this parameter expresses
+                operator intent. The actual enforcement is server-side.
+        """
         url = f"{self.base_url}/modulation/start"
         body = {
             "model_template_id": model_template_id,
@@ -276,6 +303,7 @@ class ModulatorClient:
             "search_space": search,     # <-- keep for compat
             "kpi": kpi,
             "mode": mode,
+            "governance_mode": governance_mode,
         }
         if dataset:
             body["dataset"] = dataset
