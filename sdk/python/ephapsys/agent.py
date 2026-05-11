@@ -3455,30 +3455,15 @@ class TrustedAgent:
         if not hasattr(image_input, "convert"):
             image_input = Image.open(image_input).convert("RGB")
 
-        processor = runtime.get("_vision_processor")
-        config = runtime.get("_vision_config")
-        model = runtime.get("_vision_model")
-
-        if processor is None or config is None or model is None:
-            logger.debug("[SDK][Vision] Loading model from %s", model_path)
-            processor = AutoImageProcessor.from_pretrained(model_path)
-            config = AutoConfig.from_pretrained(model_path)
-            if getattr(config, "model_type", "") == "yolos":
-                model = AutoModelForObjectDetection.from_pretrained(model_path)
-            else:
-                model = AutoModelForImageClassification.from_pretrained(model_path)
-            self._apply_ecm_if_available(model, runtime)
-            model = model.to(self._device())
-            model.eval()
-            runtime["_vision_processor"] = processor
-            runtime["_vision_config"] = config
-            runtime["_vision_model"] = model
-            logger.debug("[SDK][Vision] Model cached on %s", self._device())
-
+        processor = AutoImageProcessor.from_pretrained(model_path)
         inputs = processor(images=image_input, return_tensors="pt").to(self._device())
+        config = AutoConfig.from_pretrained(model_path)
 
         _yolos_detections = None
         if getattr(config, "model_type", "") == "yolos":
+            model = AutoModelForObjectDetection.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
             with torch.no_grad():
                 outputs = model(**inputs)
             target_sizes = torch.tensor([image_input.size[::-1]], device=self._device())
@@ -3521,6 +3506,9 @@ class TrustedAgent:
                         "frame_size": frame_size,
                     })
         else:
+            model = AutoModelForImageClassification.from_pretrained(model_path)
+            self._apply_ecm_if_available(model, runtime)
+            model = model.to(self._device())
             with torch.no_grad():
                 logits = model(**inputs).logits
                 probs = logits.softmax(-1)
