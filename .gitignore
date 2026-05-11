@@ -43,4 +43,3 @@ samples/**/tests/
 dist/
 build/
 scripts/venvs/
-scripts/.release-venv/
