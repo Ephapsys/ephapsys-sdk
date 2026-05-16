@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os, json, pathlib, hashlib, shutil, base64, time, subprocess, sys, platform, io, warnings, re, shlex, glob
-import concurrent.futures
+import concurrent.futures, threading
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from typing import Dict, Any, List, Tuple, Optional, Callable, Set, Union
 
@@ -320,10 +320,12 @@ def _record_policy_audit(
         payload["attestation_digest"] = attestation_digest
     if applied:
         payload["applied"] = applied
-    try:
-        request_fn("POST", api_base, "/telemetry", headers=headers, json_body=payload, verify_ssl=verify_ssl)
-    except Exception:
-        pass
+    def _send():
+        try:
+            request_fn("POST", api_base, "/telemetry", headers=headers, json_body=payload, verify_ssl=verify_ssl)
+        except Exception:
+            pass
+    threading.Thread(target=_send, daemon=True).start()
 
 
 # ---------- utils ----------
@@ -543,13 +545,23 @@ class TrustedAgent:
         )
 
     def get_status(self) -> Dict[str, Any]:
-        return request(
+        ttl = float(os.getenv("EPHAPSYS_STATUS_CACHE_TTL", "0"))
+        if ttl > 0:
+            cached = getattr(self, "_status_cache", None)
+            if cached is not None:
+                cached_at, cached_doc = cached
+                if time.monotonic() - cached_at < ttl:
+                    return cached_doc
+        doc = request(
             "GET",
             self.api_base,
             f"/agents/{self.agent_id}/status",
             headers=self._headers(),
             verify_ssl=self.verify_ssl,
         )
+        if ttl > 0:
+            self._status_cache = (time.monotonic(), doc)
+        return doc
 
     # ---------- Verify() Method ----------
     def verify(self) -> Tuple[bool, Dict[str, Any]]:
@@ -820,7 +832,7 @@ class TrustedAgent:
         """
         applied = []
         decision = "ok"
-        st_full = self.get_status()
+        st_full = getattr(self, "_run_status_cache", None) or self.get_status()
         model_policies = st_full.get("model_policies", [])
         if not model_policies:
             return value, applied
@@ -2629,6 +2641,7 @@ class TrustedAgent:
         """
         # Enforce basic attestation/session posture: agent must be enabled, personalized, and not revoked.
         status_doc = self.get_status()
+        self._run_status_cache = status_doc
         state = status_doc.get("state") or {}
         status_val = (status_doc.get("status") or "").lower()
         if status_val == "revoked" or state.get("revoked"):
@@ -2736,8 +2749,15 @@ class TrustedAgent:
                 payload["longitude"] = geo_lon
             if RESIDENCY_TAG:
                 payload["residency_tag"] = RESIDENCY_TAG
-            request("POST", self.api_base, "/telemetry", headers=self._headers(),
-                    json_body=payload, verify_ssl=self.verify_ssl)
+            _headers = self._headers()
+            _base, _ssl = self.api_base, self.verify_ssl
+            def _send_telemetry():
+                try:
+                    request("POST", _base, "/telemetry", headers=_headers,
+                            json_body=payload, verify_ssl=_ssl)
+                except Exception as e:
+                    logger.warning("⚠️ Telemetry logging failed: %s", e)
+            threading.Thread(target=_send_telemetry, daemon=True).start()
         except Exception as e:
             logger.warning("⚠️ Telemetry logging failed: %s", e)
 
@@ -2755,6 +2775,7 @@ class TrustedAgent:
         )
 
 
+        self._run_status_cache = None
         # return reference request response
         return result
 
