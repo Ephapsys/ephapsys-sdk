@@ -2641,143 +2641,148 @@ class TrustedAgent:
         """
         # Enforce basic attestation/session posture: agent must be enabled, personalized, and not revoked.
         status_doc = self.get_status()
+        # Cache status for _apply_policies() reuse during this run. Must be cleared
+        # on every exit path (including exceptions) so the next call sees fresh
+        # governance state — otherwise a stale "enabled" cache could mask a
+        # revocation that landed between calls.
         self._run_status_cache = status_doc
-        state = status_doc.get("state") or {}
-        status_val = (status_doc.get("status") or "").lower()
-        if status_val == "revoked" or state.get("revoked"):
-            raise RuntimeError("Agent revoked; inference blocked")
-        if status_val != "enabled":
-            raise RuntimeError(f"Agent status is '{status_val or 'unknown'}'; inference blocked")
-        if not state.get("personalized"):
-            raise RuntimeError("Agent not personalized; inference blocked")
-        attestation_digest = (status_doc.get("certificate") or {}).get("attestation_digest")
-        self._attestation_digest = attestation_digest
-        # Per-agent token cap if provided
-        policy = status_doc.get("policy") or {}
         try:
-            cap = int(policy.get("max_tokens_per_request") or DEFAULT_MAX_TOKEN_LENGTH)
-            if cap > 0:
-                self._max_tokens_cap = max(128, min(cap, DEFAULT_MAX_TOKEN_LENGTH * 4))
-        except Exception:
-            self._max_tokens_cap = DEFAULT_MAX_TOKEN_LENGTH
-        # Agent-level schema for structured outputs
-        schema = policy.get("output_schema")
-        if isinstance(schema, dict):
-            self._output_schema = schema
-        self._minimal_logging = bool(policy.get("minimal_logging"))
+            state = status_doc.get("state") or {}
+            status_val = (status_doc.get("status") or "").lower()
+            if status_val == "revoked" or state.get("revoked"):
+                raise RuntimeError("Agent revoked; inference blocked")
+            if status_val != "enabled":
+                raise RuntimeError(f"Agent status is '{status_val or 'unknown'}'; inference blocked")
+            if not state.get("personalized"):
+                raise RuntimeError("Agent not personalized; inference blocked")
+            attestation_digest = (status_doc.get("certificate") or {}).get("attestation_digest")
+            self._attestation_digest = attestation_digest
+            # Per-agent token cap if provided
+            policy = status_doc.get("policy") or {}
+            try:
+                cap = int(policy.get("max_tokens_per_request") or DEFAULT_MAX_TOKEN_LENGTH)
+                if cap > 0:
+                    self._max_tokens_cap = max(128, min(cap, DEFAULT_MAX_TOKEN_LENGTH * 4))
+            except Exception:
+                self._max_tokens_cap = DEFAULT_MAX_TOKEN_LENGTH
+            # Agent-level schema for structured outputs
+            schema = policy.get("output_schema")
+            if isinstance(schema, dict):
+                self._output_schema = schema
+            self._minimal_logging = bool(policy.get("minimal_logging"))
 
-        runtimes = self._ensure_runtime()
-        kind = (model_kind or "").strip().lower()
+            runtimes = self._ensure_runtime()
+            kind = (model_kind or "").strip().lower()
 
-        if kind not in runtimes:
-            raise RuntimeError(
-                f"No runtime prepared for kind '{kind}'. Available kinds: {list(runtimes.keys())}"
+            if kind not in runtimes:
+                raise RuntimeError(
+                    f"No runtime prepared for kind '{kind}'. Available kinds: {list(runtimes.keys())}"
+                )
+            rt = runtimes[kind]
+            _validate_io(kind, "input", input_data, max_bytes=DEFAULT_MAX_INPUT_BYTES, av_scanner=self._av_scanner)
+
+            token_count = None
+            start = time.time()
+
+            if kind == "language":
+                result, token_count = self._run_language(rt, input_data)
+            elif kind == "vision":
+                mode = (rt.get("config") or {}).get("mode", "").lower()
+                if mode == "image_gen":
+                    result = self._run_vision_generate(rt, input_data)
+                else:
+                    result = self._run_vision(rt, input_data, raw_detections=raw_detections)
+            elif kind == "world":
+                result = self._run_world(rt, input_data)
+            elif kind == "tts":
+                result = self._run_tts(rt, input_data)
+            elif kind == "stt":
+                result = self._run_stt(rt, input_data)
+            elif kind == "embedding":
+                result = self._run_embedding(rt, input_data)
+            elif kind == "multimodal":
+                mode = (rt.get("config") or {}).get("mode", "").lower()
+                if mode == "generate":
+                    result = self._run_multimodal_generate(rt, input_data)
+                else:
+                    result = self._run_multimodal(rt, input_data)
+            elif kind == "audio":
+                task = (rt.get("config") or {}).get("task", "").lower()
+                if task == "music_gen":
+                    result = self._run_audio_musicgen(rt, input_data)
+                else:
+                    result = self._run_audio(rt, input_data)
+            elif kind == "tabular":
+                result = self._run_tabular(rt, input_data)
+            elif kind == "timeseries":
+                result = self._run_timeseries(rt, input_data)
+            elif kind == "vocoder":
+                # Vocoder is primarily used as aux for TTS; direct run returns its model path.
+                result = rt.get("model_path")
+            elif kind == "rl":
+                result =  self._run_rl(rt, input_data)
+            else:
+                raise ValueError(f"Unsupported model_kind: {model_kind}")
+
+            latency_ms = int((time.time() - start) * 1000)
+
+            feedback = {"latency_ms": latency_ms}
+            if token_count is not None:
+                feedback["token_count"] = token_count
+            self._update_adaptation(kind, rt, feedback)
+            _validate_io(kind, "output", result, max_bytes=DEFAULT_MAX_INPUT_BYTES, av_scanner=None)
+            # Schema validation for structured outputs if provided at agent level
+            _validate_schema(result, self._output_schema)
+
+            # Quick Telemetry (TODO: add latency or result size in telemetry so /stats/summary could later show average latency, tokens/sec,)
+            geo_lat, geo_lon = self._extract_geo(input_data)
+            if (geo_lat is None or geo_lon is None) and self._geo:
+                geo_lat, geo_lon = self._geo
+
+            try:
+                payload = {
+                    "event": "inference",
+                    "agent_id": self.agent_id,
+                    "latency_ms": latency_ms,
+                    "model_kind": kind,
+                    "attestation_digest": attestation_digest,
+                }
+                if not self._minimal_logging and token_count is not None:
+                    payload["token_count"] = token_count
+                if not self._minimal_logging and geo_lat is not None and geo_lon is not None:
+                    payload["latitude"] = geo_lat
+                    payload["longitude"] = geo_lon
+                if RESIDENCY_TAG:
+                    payload["residency_tag"] = RESIDENCY_TAG
+                _headers = self._headers()
+                _base, _ssl = self.api_base, self.verify_ssl
+                def _send_telemetry():
+                    try:
+                        request("POST", _base, "/telemetry", headers=_headers,
+                                json_body=payload, verify_ssl=_ssl)
+                    except Exception as e:
+                        logger.warning("⚠️ Telemetry logging failed: %s", e)
+                threading.Thread(target=_send_telemetry, daemon=True).start()
+            except Exception as e:
+                logger.warning("⚠️ Telemetry logging failed: %s", e)
+
+            # Audit: record policy outcome with attestation reference
+            _record_policy_audit(
+                request,
+                self.api_base,
+                self._headers(),
+                self.verify_ssl,
+                agent_id=self.agent_id,
+                model_kind=kind,
+                decision="ok",
+                attestation_digest=attestation_digest,
+                applied=None,
             )
-        rt = runtimes[kind]
-        _validate_io(kind, "input", input_data, max_bytes=DEFAULT_MAX_INPUT_BYTES, av_scanner=self._av_scanner)
 
-        token_count = None
-        start = time.time()
-
-        if kind == "language":
-            result, token_count = self._run_language(rt, input_data)
-        elif kind == "vision":
-            mode = (rt.get("config") or {}).get("mode", "").lower()
-            if mode == "image_gen":
-                result = self._run_vision_generate(rt, input_data)
-            else:
-                result = self._run_vision(rt, input_data, raw_detections=raw_detections)
-        elif kind == "world":
-            result = self._run_world(rt, input_data)
-        elif kind == "tts":
-            result = self._run_tts(rt, input_data)
-        elif kind == "stt":
-            result = self._run_stt(rt, input_data)
-        elif kind == "embedding":
-            result = self._run_embedding(rt, input_data)
-        elif kind == "multimodal":
-            mode = (rt.get("config") or {}).get("mode", "").lower()
-            if mode == "generate":
-                result = self._run_multimodal_generate(rt, input_data)
-            else:
-                result = self._run_multimodal(rt, input_data)
-        elif kind == "audio":
-            task = (rt.get("config") or {}).get("task", "").lower()
-            if task == "music_gen":
-                result = self._run_audio_musicgen(rt, input_data)
-            else:
-                result = self._run_audio(rt, input_data)
-        elif kind == "tabular":
-            result = self._run_tabular(rt, input_data)
-        elif kind == "timeseries":
-            result = self._run_timeseries(rt, input_data)
-        elif kind == "vocoder":
-            # Vocoder is primarily used as aux for TTS; direct run returns its model path.
-            result = rt.get("model_path")
-        elif kind == "rl":
-            result =  self._run_rl(rt, input_data)
-        else:
-            raise ValueError(f"Unsupported model_kind: {model_kind}")
-
-        latency_ms = int((time.time() - start) * 1000)
-
-        feedback = {"latency_ms": latency_ms}
-        if token_count is not None:
-            feedback["token_count"] = token_count
-        self._update_adaptation(kind, rt, feedback)
-        _validate_io(kind, "output", result, max_bytes=DEFAULT_MAX_INPUT_BYTES, av_scanner=None)
-        # Schema validation for structured outputs if provided at agent level
-        _validate_schema(result, self._output_schema)
-
-        # Quick Telemetry (TODO: add latency or result size in telemetry so /stats/summary could later show average latency, tokens/sec,)
-        geo_lat, geo_lon = self._extract_geo(input_data)
-        if (geo_lat is None or geo_lon is None) and self._geo:
-            geo_lat, geo_lon = self._geo
-
-        try:
-            payload = {
-                "event": "inference",
-                "agent_id": self.agent_id,
-                "latency_ms": latency_ms,
-                "model_kind": kind,
-                "attestation_digest": attestation_digest,
-            }
-            if not self._minimal_logging and token_count is not None:
-                payload["token_count"] = token_count
-            if not self._minimal_logging and geo_lat is not None and geo_lon is not None:
-                payload["latitude"] = geo_lat
-                payload["longitude"] = geo_lon
-            if RESIDENCY_TAG:
-                payload["residency_tag"] = RESIDENCY_TAG
-            _headers = self._headers()
-            _base, _ssl = self.api_base, self.verify_ssl
-            def _send_telemetry():
-                try:
-                    request("POST", _base, "/telemetry", headers=_headers,
-                            json_body=payload, verify_ssl=_ssl)
-                except Exception as e:
-                    logger.warning("⚠️ Telemetry logging failed: %s", e)
-            threading.Thread(target=_send_telemetry, daemon=True).start()
-        except Exception as e:
-            logger.warning("⚠️ Telemetry logging failed: %s", e)
-
-        # Audit: record policy outcome with attestation reference
-        _record_policy_audit(
-            request,
-            self.api_base,
-            self._headers(),
-            self.verify_ssl,
-            agent_id=self.agent_id,
-            model_kind=kind,
-            decision="ok",
-            attestation_digest=attestation_digest,
-            applied=None,
-        )
-
-
-        self._run_status_cache = None
-        # return reference request response
-        return result
+            # return reference request response
+            return result
+        finally:
+            self._run_status_cache = None
 
 
 
