@@ -2678,6 +2678,25 @@ class TrustedAgent:
                 raise RuntimeError(
                     f"No runtime prepared for kind '{kind}'. Available kinds: {list(runtimes.keys())}"
                 )
+
+            # Per-model selective inference: if the operator has disabled or
+            # revoked this specific model via the AOC portal, reject the call
+            # even though the agent itself is enabled. Status is delivered in
+            # status_doc.agent.models[].status (kind-matched). Older platforms
+            # that don't enrich the field fall through to existing behavior.
+            for _m in (status_doc.get("agent") or {}).get("models") or []:
+                if not isinstance(_m, dict):
+                    continue
+                _m_kind = (_m.get("kind") or (_m.get("config") or {}).get("type") or "").lower()
+                if _m_kind != kind:
+                    continue
+                _m_status = (_m.get("status") or "").lower()
+                if _m_status == "revoked":
+                    raise RuntimeError(f"Model kind '{kind}' revoked; inference blocked")
+                if _m_status == "disabled":
+                    raise RuntimeError(f"Model kind '{kind}' disabled; inference blocked")
+                break
+
             rt = runtimes[kind]
             _validate_io(kind, "input", input_data, max_bytes=DEFAULT_MAX_INPUT_BYTES, av_scanner=self._av_scanner)
 
