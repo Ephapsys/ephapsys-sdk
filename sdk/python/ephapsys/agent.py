@@ -3454,6 +3454,14 @@ class TrustedAgent:
 
             self._apply_ecm_if_available(model, runtime)
             model = self._normalize_model_dtype(model)
+            # Inference must run in eval mode: HF models load with training=True,
+            # leaving dropout active so every generate() call samples different
+            # masks → non-deterministic output (and sync vs streaming diverge on
+            # the same input). eval() disables dropout for reproducible decoding.
+            try:
+                model.eval()
+            except Exception as exc:
+                logger.debug("[SDK][Language] model.eval() skipped: %s", exc)
             runtime["_language_tokenizer"] = tok
             runtime["_language_config"] = cfg
             runtime["_language_model"] = model

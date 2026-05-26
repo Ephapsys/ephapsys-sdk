@@ -29,7 +29,23 @@ import tempfile
 os.environ.pop("AOC_MAX_NEW_TOKENS", None)
 os.environ["AOC_LANGUAGE_USE_CHAT_TEMPLATE"] = "0"  # tiny-gpt2 has no chat template
 
-TINY_MODEL = os.getenv("TEST_TINY_MODEL", "sshleifer/tiny-gpt2")
+# A real (not randomly-initialized) small model so greedy decode is stable and
+# the stream-equals-sync assertion is meaningful. tiny-gpt2 has near-uniform
+# logits where argmax ties resolve non-deterministically.
+TINY_MODEL = os.getenv("TEST_TINY_MODEL", "distilgpt2")
+
+import torch  # noqa: E402
+
+# Streaming runs model.generate() on a background thread. On CPU, torch
+# intra-op parallelism can reorder float reductions across thread contexts,
+# which flips argmax on near-tied logits and makes greedy decode diverge
+# between the threaded (stream) and main-thread (sync) paths. Pin to a single
+# thread + deterministic algorithms so both take an identical reduction order
+# and the stream-equals-sync assertion is a meaningful faithfulness check
+# rather than a flaky FP race.
+torch.manual_seed(0)
+torch.use_deterministic_algorithms(True)
+torch.set_num_threads(1)
 
 from ephapsys.agent import TrustedAgent  # noqa: E402
 
