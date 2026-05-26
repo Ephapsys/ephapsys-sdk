@@ -2803,6 +2803,106 @@ class TrustedAgent:
         finally:
             self._run_status_cache = None
 
+    def run_stream(self, input_data: Any, model_kind: str = "language"):
+        """
+        Streaming inference entrypoint (issue #3). Yields decoded text chunks as
+        they are generated. Currently supported for `model_kind="language"`.
+
+        Runs the same fail-closed governance preflight as run() (agent must be
+        enabled, personalized, not revoked; per-model status honored; input
+        policies enforced), then streams tokens via TextIteratorStreamer. Output
+        policies/guardrails are applied to the full text once the stream ends —
+        see _run_language_stream for the governance caveat.
+
+        Usage:
+            for chunk in agent.run_stream("Tell me a story", model_kind="language"):
+                print(chunk, end="", flush=True)
+        """
+        kind = (model_kind or "").strip().lower()
+        if kind != "language":
+            raise ValueError(f"run_stream only supports model_kind='language', got '{model_kind}'")
+
+        status_doc = self.get_status()
+        self._run_status_cache = status_doc
+        try:
+            state = status_doc.get("state") or {}
+            status_val = (status_doc.get("status") or "").lower()
+            if status_val == "revoked" or state.get("revoked"):
+                raise RuntimeError("Agent revoked; inference blocked")
+            if status_val != "enabled":
+                raise RuntimeError(f"Agent status is '{status_val or 'unknown'}'; inference blocked")
+            if not state.get("personalized"):
+                raise RuntimeError("Agent not personalized; inference blocked")
+
+            attestation_digest = (status_doc.get("certificate") or {}).get("attestation_digest")
+            self._attestation_digest = attestation_digest
+
+            policy = status_doc.get("policy") or {}
+            try:
+                cap = int(policy.get("max_tokens_per_request") or DEFAULT_MAX_TOKEN_LENGTH)
+                if cap > 0:
+                    self._max_tokens_cap = max(128, min(cap, DEFAULT_MAX_TOKEN_LENGTH * 4))
+            except Exception:
+                self._max_tokens_cap = DEFAULT_MAX_TOKEN_LENGTH
+            self._minimal_logging = bool(policy.get("minimal_logging"))
+
+            runtimes = self._ensure_runtime()
+            if kind not in runtimes:
+                raise RuntimeError(
+                    f"No runtime prepared for kind '{kind}'. Available kinds: {list(runtimes.keys())}"
+                )
+
+            # Per-model selective inference (same as run()).
+            for _m in (status_doc.get("agent") or {}).get("models") or []:
+                if not isinstance(_m, dict):
+                    continue
+                _m_kind = (_m.get("kind") or (_m.get("config") or {}).get("type") or "").lower()
+                if _m_kind != kind:
+                    continue
+                _m_status = (_m.get("status") or "").lower()
+                if _m_status == "revoked":
+                    raise RuntimeError(f"Model kind '{kind}' revoked; inference blocked")
+                if _m_status == "disabled":
+                    raise RuntimeError(f"Model kind '{kind}' disabled; inference blocked")
+                break
+
+            rt = runtimes[kind]
+            _validate_io(kind, "input", input_data, max_bytes=DEFAULT_MAX_INPUT_BYTES, av_scanner=self._av_scanner)
+
+            start = time.time()
+            token_count = 0
+            for chunk in self._run_language_stream(rt, input_data):
+                token_count += 1
+                yield chunk
+            latency_ms = int((time.time() - start) * 1000)
+
+            try:
+                payload = {
+                    "event": "inference",
+                    "agent_id": self.agent_id,
+                    "latency_ms": latency_ms,
+                    "model_kind": kind,
+                    "attestation_digest": attestation_digest,
+                    "streamed": True,
+                }
+                if not self._minimal_logging:
+                    payload["chunk_count"] = token_count
+                if RESIDENCY_TAG:
+                    payload["residency_tag"] = RESIDENCY_TAG
+                _headers = self._headers()
+                _base, _ssl = self.api_base, self.verify_ssl
+
+                def _send_telemetry():
+                    try:
+                        request("POST", _base, "/telemetry", headers=_headers,
+                                json_body=payload, verify_ssl=_ssl)
+                    except Exception as e:
+                        logger.warning("⚠️ Telemetry logging failed: %s", e)
+                threading.Thread(target=_send_telemetry, daemon=True).start()
+            except Exception as e:
+                logger.warning("⚠️ Telemetry logging failed: %s", e)
+        finally:
+            self._run_status_cache = None
 
 
     # ---------------------- Kind-specific helpers ----------------------
@@ -3261,33 +3361,16 @@ class TrustedAgent:
             logger.debug("[SDK][Adapt] Telemetry send failed: %s", exc)
         runtime["_adapt_state"] = state
 
-    def _run_language(self, runtime: Dict[str, Any], prompt: str) -> tuple[str, int]:
-        """
-        Runs a language model with input/output policy enforcement baked in.
-        Returns (decoded_text, token_count).
+    def _ensure_language_model_loaded(self, runtime: Dict[str, Any]):
+        """Load + cache the causal/seq2seq LM and tokenizer on the runtime dict.
+
+        Shared by _run_language (sync) and _run_language_stream (streaming) so
+        the model is loaded once and ECM hooks are installed identically on both
+        paths. Returns (tok, cfg, model, model_cls, is_causal).
         """
         model_path = runtime.get("model_path")
         if not model_path:
             raise RuntimeError("Language runtime missing model_path")
-
-        # --- Enforce input policies for language ---
-        enforced_input, in_policies = self.enforce_policies_model_kind(prompt, "language", "input")
-        if not enforced_input:
-            logger.warning("⚠️ Input blocked by policies: %s", in_policies)
-            return "[BLOCKED BY POLICIES]", 0
-
-        gguf_path = self._find_gguf_path(runtime)
-        if gguf_path:
-            decoded, token_count = self._run_language_gguf(runtime, str(enforced_input))
-            enforced_output, out_policies = self.enforce_policies_model_kind(decoded, "language", "output")
-            if not enforced_output:
-                logger.warning("⚠️ Output blocked by policies: %s", out_policies)
-                return "[BLOCKED BY POLICIES]", token_count
-            guard_output, _ = self._apply_guardrails_with_logging(runtime, enforced_output, "language")
-            if guard_output is None:
-                return "[BLOCKED BY GUARDRAILS]", token_count
-            return guard_output, token_count
-
         try:
             from transformers import (
                 AutoTokenizer,
@@ -3295,7 +3378,6 @@ class TrustedAgent:
                 AutoModelForSeq2SeqLM,
                 AutoConfig,
             )
-            import torch
         except ImportError:
             raise RuntimeError("Transformers not installed. `pip install transformers`")
 
@@ -3377,6 +3459,16 @@ class TrustedAgent:
             runtime["_language_model"] = model
             runtime["_language_model_cls"] = model_cls
 
+        from transformers import AutoModelForCausalLM as _Causal
+        return tok, cfg, model, model_cls, (model_cls is _Causal)
+
+    def _prepare_language_inputs(self, runtime: Dict[str, Any], enforced_input: Any, tok):
+        """Render the prompt, tokenize, and build model.generate() kwargs.
+
+        Returns (inputs, input_tokens, generate_kwargs). Shared by the sync and
+        streaming language paths so the generation parameters (including the
+        max_new_tokens precedence) are identical on both.
+        """
         model_cfg = runtime.get("config") or {}
         generation_cfg = model_cfg.get("generation") or {}
         use_chat_template = str(
@@ -3400,9 +3492,23 @@ class TrustedAgent:
         inputs = tok(rendered_prompt, return_tensors="pt").to(self._device())
         input_tokens = int(inputs["input_ids"].shape[1])
 
-        max_new_tokens = int(
-            generation_cfg.get("max_new_tokens", model_cfg.get("max_new_tokens", os.getenv("AOC_MAX_NEW_TOKENS", "96")))
+        # max_new_tokens precedence (issue #3): an explicitly configured value
+        # (generation_cfg / model_cfg / AOC_MAX_NEW_TOKENS env) wins; otherwise
+        # derive the output budget from the max_tokens_per_request policy
+        # (self._max_tokens_cap) so the Agent Template "Max Tokens / Request"
+        # field actually governs response length. Falls back to 512 (not the
+        # old surprising hardcoded 96) only when no policy cap is available.
+        _explicit_new = (
+            generation_cfg.get("max_new_tokens")
+            or model_cfg.get("max_new_tokens")
+            or os.getenv("AOC_MAX_NEW_TOKENS")
         )
+        if _explicit_new is not None:
+            max_new_tokens = int(_explicit_new)
+        elif getattr(self, "_max_tokens_cap", 0):
+            max_new_tokens = int(self._max_tokens_cap)
+        else:
+            max_new_tokens = 512
         temperature = float(
             generation_cfg.get("temperature", model_cfg.get("temperature", os.getenv("AOC_LANGUAGE_TEMPERATURE", "0.7")))
         )
@@ -3440,10 +3546,44 @@ class TrustedAgent:
         else:
             generate_kwargs["do_sample"] = False
 
+        return inputs, input_tokens, generate_kwargs
+
+    def _run_language(self, runtime: Dict[str, Any], prompt: str) -> tuple[str, int]:
+        """
+        Runs a language model with input/output policy enforcement baked in.
+        Returns (decoded_text, token_count).
+        """
+        model_path = runtime.get("model_path")
+        if not model_path:
+            raise RuntimeError("Language runtime missing model_path")
+
+        # --- Enforce input policies for language ---
+        enforced_input, in_policies = self.enforce_policies_model_kind(prompt, "language", "input")
+        if not enforced_input:
+            logger.warning("⚠️ Input blocked by policies: %s", in_policies)
+            return "[BLOCKED BY POLICIES]", 0
+
+        gguf_path = self._find_gguf_path(runtime)
+        if gguf_path:
+            decoded, token_count = self._run_language_gguf(runtime, str(enforced_input))
+            enforced_output, out_policies = self.enforce_policies_model_kind(decoded, "language", "output")
+            if not enforced_output:
+                logger.warning("⚠️ Output blocked by policies: %s", out_policies)
+                return "[BLOCKED BY POLICIES]", token_count
+            guard_output, _ = self._apply_guardrails_with_logging(runtime, enforced_output, "language")
+            if guard_output is None:
+                return "[BLOCKED BY GUARDRAILS]", token_count
+            return guard_output, token_count
+
+        import torch
+
+        tok, cfg, model, model_cls, is_causal = self._ensure_language_model_loaded(runtime)
+        inputs, input_tokens, generate_kwargs = self._prepare_language_inputs(runtime, enforced_input, tok)
+
         with torch.no_grad():
             outputs = model.generate(**inputs, **generate_kwargs)
 
-        if model_cls is AutoModelForCausalLM:
+        if is_causal:
             generated_ids = outputs[0][input_tokens:]
         else:
             generated_ids = outputs[0]
@@ -3469,6 +3609,93 @@ class TrustedAgent:
             logger.info("Output policies applied: %s", out_policies)
         return guard_output, token_count
 
+    def _run_language_stream(self, runtime: Dict[str, Any], prompt: str):
+        """
+        Streaming variant of _run_language (issue #3). Yields decoded text
+        chunks as the model generates, using HuggingFace TextIteratorStreamer
+        with generation running on a background thread.
+
+        Governance note: input policies are enforced before generation (same as
+        the sync path). Output policies/guardrails are enforced on the *full*
+        accumulated text once the stream completes — if the completed output is
+        blocked, a trailing sentinel chunk is yielded. Callers that require
+        pre-emptive output redaction should use the non-streaming run() path.
+        """
+        model_path = runtime.get("model_path")
+        if not model_path:
+            raise RuntimeError("Language runtime missing model_path")
+
+        enforced_input, in_policies = self.enforce_policies_model_kind(prompt, "language", "input")
+        if not enforced_input:
+            logger.warning("⚠️ Input blocked by policies: %s", in_policies)
+            yield "[BLOCKED BY POLICIES]"
+            return
+
+        # GGUF runtimes don't expose a token streamer here; fall back to a
+        # single synchronous chunk so the streaming API still works for them.
+        gguf_path = self._find_gguf_path(runtime)
+        if gguf_path:
+            decoded, _ = self._run_language_gguf(runtime, str(enforced_input))
+            enforced_output, out_policies = self.enforce_policies_model_kind(decoded, "language", "output")
+            if not enforced_output:
+                logger.warning("⚠️ Output blocked by policies: %s", out_policies)
+                yield "[BLOCKED BY POLICIES]"
+                return
+            guard_output, _ = self._apply_guardrails_with_logging(runtime, enforced_output, "language")
+            yield guard_output if guard_output is not None else "[BLOCKED BY GUARDRAILS]"
+            return
+
+        import threading
+        try:
+            from transformers import TextIteratorStreamer
+        except ImportError:
+            raise RuntimeError("Transformers not installed. `pip install transformers`")
+
+        tok, cfg, model, model_cls, is_causal = self._ensure_language_model_loaded(runtime)
+        inputs, input_tokens, generate_kwargs = self._prepare_language_inputs(runtime, enforced_input, tok)
+
+        # skip_prompt only matters for causal models, where generate() returns
+        # the prompt + completion; seq2seq output already excludes the prompt.
+        streamer = TextIteratorStreamer(
+            tok, skip_prompt=is_causal, skip_special_tokens=True
+        )
+        stream_kwargs = dict(generate_kwargs)
+        stream_kwargs["streamer"] = streamer
+
+        gen_error: Dict[str, Any] = {}
+
+        def _generate():
+            try:
+                import torch
+                with torch.no_grad():
+                    model.generate(**inputs, **stream_kwargs)
+            except Exception as exc:  # surface to the consumer after drain
+                gen_error["exc"] = exc
+
+        gen_thread = threading.Thread(target=_generate, daemon=True)
+        gen_thread.start()
+
+        chunks: List[str] = []
+        for text in streamer:
+            if not text:
+                continue
+            chunks.append(text)
+            yield text
+
+        gen_thread.join()
+        if gen_error.get("exc") is not None:
+            raise gen_error["exc"]
+
+        # Enforce output policies + guardrails on the full accumulated text.
+        full = "".join(chunks).strip()
+        enforced_output, out_policies = self.enforce_policies_model_kind(full, "language", "output")
+        if not enforced_output:
+            logger.warning("⚠️ Streamed output blocked by policies: %s", out_policies)
+            yield "\n[OUTPUT BLOCKED BY POLICIES]"
+            return
+        guard_output, _ = self._apply_guardrails_with_logging(runtime, enforced_output, "language")
+        if guard_output is None:
+            yield "\n[OUTPUT BLOCKED BY GUARDRAILS]"
 
     # --- Vision (image classification) ---
     def _run_vision(self, runtime: Dict[str, Any], image_input: Any, raw_detections: bool = False) -> Any:
