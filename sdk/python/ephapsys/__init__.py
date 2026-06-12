@@ -13,6 +13,8 @@ __all__ = [
     "A2AClient",
     "VerifiedMessage",
     "MessageJournal",
+    "MCPToolServer",
+    "ToolRegistry",
     "compute_indispensability_loss",
     "run_ablation_probe",
 ]
@@ -37,6 +39,12 @@ def __getattr__(name):
     if name == "MessageJournal":
         from .journal import MessageJournal as _MessageJournal
         return _MessageJournal
+    if name == "MCPToolServer":
+        from .mcp import MCPToolServer as _MCPToolServer
+        return _MCPToolServer
+    if name == "ToolRegistry":
+        from .mcp import ToolRegistry as _ToolRegistry
+        return _ToolRegistry
     if name == "compute_indispensability_loss":
         from .modulation import compute_indispensability_loss as _fn
         return _fn

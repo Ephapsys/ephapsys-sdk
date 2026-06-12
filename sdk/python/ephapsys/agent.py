@@ -2803,6 +2803,29 @@ class TrustedAgent:
         finally:
             self._run_status_cache = None
 
+    def _mcp_server(self):
+        srv = getattr(self, "_mcp_tool_server", None)
+        if srv is None:
+            from .mcp import MCPToolServer
+            srv = MCPToolServer(self)
+            self._mcp_tool_server = srv
+        return srv
+
+    def list_tools(self):
+        """MCP ``tools/list``: this agent's ``model_kind``s as callable tool
+        descriptors (``{name, description, inputSchema}``). See ``ephapsys.mcp``."""
+        return self._mcp_server().list_tools()
+
+    def run_tool(self, name: str, args: Optional[Dict[str, Any]] = None) -> Any:
+        """MCP ``tools/call``: run a tool by name. Dispatches through ``run()``,
+        so the fail-closed governance preflight (kill-switch) applies."""
+        return self._mcp_server().run_tool(name, args)
+
+    def serve_mcp(self, host: str = "0.0.0.0", port: int = 8081) -> None:
+        """Serve this agent's tools over MCP HTTP/JSON-RPC.
+        See ``ephapsys.mcp.MCPToolServer``."""
+        return self._mcp_server().serve_mcp(host, port)
+
     def run_stream(self, input_data: Any, model_kind: str = "language"):
         """
         Streaming inference entrypoint (issue #3). Yields decoded text chunks as

@@ -138,6 +138,9 @@ class A2AClient:
             raise RuntimeError("A2A signed mode requires AOC_ORG_ID (or org_id constructor argument).")
         if self.sign_requests and not self.hmac_secret:
             raise RuntimeError("A2A signed mode requires A2A_HMAC_SECRET (or hmac_secret constructor argument).")
+        # Lease cache for check_agent_status(): {agent_id: (monotonic_ts, result)}.
+        # Only successful lookups are cached; failures are never served stale (fail-closed).
+        self._status_cache: Dict[str, Any] = {}
 
     @classmethod
     def from_env(cls) -> "A2AClient":
@@ -287,6 +290,160 @@ class A2AClient:
             "state": data.get("state") or {},
             "error": None,
         }
+
+    def check_agent_status(
+        self,
+        agent_id: str,
+        *,
+        max_age_seconds: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Look up an agent's current status, with an optional lease cache.
+
+        This is the **decoupled kill-switch primitive**: it lets a consumer
+        running its own transport (e.g. Graham's direct edge↔cloud HTTP)
+        enforce revocation/disable per request without routing the message
+        through the A2A inbox. It is the same ``GET /agents/{id}/status``
+        lookup that :meth:`verify_message` performs internally.
+
+        Parameters
+        ----------
+        agent_id:
+            The agent whose status to look up.
+        max_age_seconds:
+            If > 0, a successful lookup is reused from the in-process lease
+            cache when it is younger than this many seconds — trading instant
+            revocation for fewer round trips on latency-sensitive (e.g. edge)
+            hot paths. With the default ``0.0`` every call hits the AOC, so the
+            kill-switch is strictly fresh. **Choosing a non-zero lease makes
+            revocation eventually-consistent: a revoked peer can slip through
+            until the lease expires.** Pick the window deliberately.
+
+        Returns the same dict shape as ``_check_sender_status`` (``ok`` /
+        ``status`` / ``state`` / ``error``). Lookup failures are returned as
+        ``ok=False`` and are never cached (fail-closed).
+
+        .. note::
+           This verifies the peer's *status*, not its *identity*. It does not
+           cryptographically prove the request came from ``agent_id`` — A2A
+           sender authentication is currently mediated by the AOC inbox /
+           shared-secret HMAC, not a per-agent peer signature. Anti-spoofing
+           over a fully decoupled transport is separate, unimplemented work.
+        """
+        if max_age_seconds and max_age_seconds > 0:
+            cached = self._status_cache.get(agent_id)
+            if cached is not None:
+                ts, result = cached
+                if (time.monotonic() - ts) <= max_age_seconds:
+                    return dict(result)
+        result = self._check_sender_status(agent_id)
+        if result.get("ok"):
+            self._status_cache[agent_id] = (time.monotonic(), dict(result))
+        else:
+            # Never serve a stale value once a fresh lookup fails.
+            self._status_cache.pop(agent_id, None)
+        return result
+
+    def is_peer_authorized(
+        self,
+        agent_id: str,
+        *,
+        max_age_seconds: float = 0.0,
+    ) -> bool:
+        """Convenience boolean kill-switch gate built on :meth:`check_agent_status`.
+
+        Returns ``True`` only if the lookup succeeded and the agent's current
+        status is in :data:`ACCEPTED_SENDER_STATUSES` and not revoked.
+        Fail-closed: any lookup error returns ``False``. See
+        :meth:`check_agent_status` for the ``max_age_seconds`` lease semantics
+        and the identity-vs-status caveat.
+        """
+        result = self.check_agent_status(agent_id, max_age_seconds=max_age_seconds)
+        if not result.get("ok"):
+            return False
+        status = (result.get("status") or "").upper()
+        state = result.get("state") or {}
+        if state.get("revoked") or status == "REVOKED":
+            return False
+        return status in ACCEPTED_SENDER_STATUSES
+
+    def sign_request(
+        self,
+        *,
+        method: str,
+        path: str,
+        body: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """Produce A2A signature headers for a request on a consumer-owned transport.
+
+        Exposes the same HMAC scheme :meth:`_signed_headers` uses for the AOC
+        inbox, so a consumer can authenticate a request it sends over its own
+        transport (not via :meth:`send_message`). ``body`` must be the A2A
+        message body shape (``from_agent_id``/``to_agent_id``/``message_type``/
+        ``payload``/``correlation_id``/``ttl_seconds``); only the canonical
+        subset is signed.
+
+        Requires ``org_id`` and ``hmac_secret`` to be configured (independent
+        of the ``sign_requests`` flag, since this is an explicit signing call).
+
+        .. note::
+           This is a **shared-secret (org-scoped) HMAC**, not a per-agent PKI
+           signature. A verifier must hold the same ``hmac_secret`` (i.e. be in
+           the same trust domain). Per-agent peer authentication over a fully
+           decoupled transport is separate, unimplemented work.
+        """
+        if not self.org_id or not self.hmac_secret:
+            raise RuntimeError(
+                "sign_request requires org_id and hmac_secret "
+                "(A2A signed identity not configured)."
+            )
+        ts = int(time.time())
+        nonce = secrets.token_hex(16)
+        canonical = "\n".join(
+            [
+                str(ts),
+                nonce,
+                method.upper(),
+                path,
+                self.org_id,
+                self._canonical_send_payload(body),
+            ]
+        )
+        sig = hmac.new(
+            self.hmac_secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return {
+            "x-a2a-ts": str(ts),
+            "x-a2a-nonce": nonce,
+            "x-a2a-sig": sig,
+            "x-a2a-org": self.org_id,
+        }
+
+    def verify_request(
+        self,
+        *,
+        from_agent_id: str,
+        payload: Any,
+        message_type: str = "tool_call",
+        scan_guardrails: bool = True,
+    ) -> VerifiedMessage:
+        """Verify an inbound request received over a consumer-owned transport.
+
+        Convenience wrapper that assembles the A2A message shape from a raw
+        ``from_agent_id`` + ``payload`` (as a direct-HTTP receiver would have)
+        and runs it through :meth:`verify_message` — i.e. sender status check
+        (kill-switch) plus the prompt-injection guardrail scan — without
+        requiring the message to have arrived via the A2A inbox.
+
+        Same status/identity caveat as :meth:`check_agent_status`: this gates
+        on the sender's *status* and scans the payload; it does not prove
+        sender identity cryptographically.
+        """
+        message = {
+            "from_agent_id": from_agent_id,
+            "message_type": message_type,
+            "payload": payload,
+        }
+        return self.verify_message(message, scan_guardrails=scan_guardrails)
 
     def verify_message(
         self,
