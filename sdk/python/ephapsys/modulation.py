@@ -17,14 +17,21 @@ def compute_indispensability_loss(
     inputs: Dict[str, torch.Tensor],
     alpha: float = 10.0,
     beta: float = 0.01,
+    margin: float = 0.5,
+    objective: str = "dispensability",
 ) -> Dict[str, torch.Tensor]:
     """
     Compute Family D indispensability loss components.
 
-    Runs the model twice — once with ECM hooks active, once without — and
-    measures hidden-state divergence. The resulting loss terms encourage the
-    base weights W to structurally depend on Λ so that removing Λ destroys
-    model coherence.
+    Two objectives are supported:
+
+    - ``"dispensability"`` (default; back-compat): the original unbounded
+      hidden-state divergence reward. ``total = task - alpha*divergence + beta*stab``.
+    - ``"hinge"``: bounded gap objective. ``gap = CE_noΛ(no_grad) - CE_withΛ``;
+      ``total = CE_withΛ + alpha*relu(margin - gap) + beta*stab``. The noΛ branch
+      is detached, so the only gradient path shrinks the penalty by improving the
+      WITH-Λ model (no "wreck it to earn divergence" cheat). Requires ``labels``
+      in ``inputs`` so the no-ECM forward yields a CE loss.
 
     Works with any model kind (language, vision, audio, RL, embedding, etc.)
     as long as the model supports ``output_hidden_states=True``.
@@ -34,14 +41,17 @@ def compute_indispensability_loss(
         inputs: Tokenized/processed inputs (dict of tensors on the correct device).
         alpha: Weight for indispensability loss (higher = stronger coupling).
         beta: Weight for stability loss (prevents Λ norm explosion).
+        margin: Target CE gap for the ``"hinge"`` objective (nats). Ignored otherwise.
+        objective: ``"dispensability"`` (default) or ``"hinge"``.
 
     Returns:
         Dict with keys:
-            ``task_loss``: Standard forward-pass loss (from model's built-in head).
-            ``indispensability_loss``: Relative hidden-state divergence (higher = more load-bearing).
+            ``task_loss``: Standard forward-pass loss (= CE_withΛ).
+            ``indispensability_loss``: divergence (legacy) or ``relu(margin - gap)`` (hinge).
             ``stability_loss``: Λ Frobenius norm regularizer.
-            ``total_loss``: ``task_loss - alpha * indispensability_loss + beta * stability_loss``.
-            ``separation``: Raw MSE between ECM-active and ECM-removed hidden states.
+            ``total_loss``: combined objective (see above).
+            ``separation``: legacy MSE ``diff`` (dispensability) or ``gap`` (hinge).
+            ``gap``: CE gap tensor in ``"hinge"`` mode, else ``None``.
     """
     # --- Step 1: Forward WITHOUT ECM (temporarily disable hooks) ---
     saved_hooks: Dict[str, dict] = {}
@@ -53,6 +63,7 @@ def compute_indispensability_loss(
     with torch.no_grad():
         outputs_no_ecm = model(**inputs, output_hidden_states=True)
         h_base = outputs_no_ecm.hidden_states[-1].detach()
+        ce_no_ecm = outputs_no_ecm.loss  # None unless `labels` in inputs (hinge)
 
     # Restore hooks
     for name, mod in model.named_modules():
@@ -63,13 +74,12 @@ def compute_indispensability_loss(
     outputs_ecm = model(**inputs, output_hidden_states=True)
     h_ecm = outputs_ecm.hidden_states[-1]
 
-    # Task loss (from model head)
+    # Task loss (from model head) = CE_withΛ
     task_loss = outputs_ecm.loss if outputs_ecm.loss is not None else torch.tensor(0.0, device=h_ecm.device)
 
-    # Indispensability = relative hidden-state divergence
+    # Legacy dispensability signal: relative hidden-state divergence
     diff = (h_ecm - h_base).pow(2).mean()
     base_norm = h_base.pow(2).mean().clamp(min=1e-8)
-    indispensability_loss = diff / base_norm
 
     # Stability = Λ Frobenius norm
     stability_loss = torch.tensor(0.0, device=h_ecm.device)
@@ -78,14 +88,29 @@ def compute_indispensability_loss(
             stability_loss = param.pow(2).mean()
             break
 
-    total_loss = task_loss - alpha * indispensability_loss + beta * stability_loss
+    if objective == "hinge":
+        if ce_no_ecm is None:
+            raise ValueError(
+                "compute_indispensability_loss(objective='hinge') requires `labels` in inputs")
+        gap = ce_no_ecm.detach() - task_loss
+        indispensability_loss = torch.relu(
+            torch.as_tensor(margin, device=task_loss.device, dtype=task_loss.dtype) - gap)
+        total_loss = task_loss + alpha * indispensability_loss + beta * stability_loss
+        separation = gap  # keep key present for existing consumers
+    else:
+        # Legacy dispensability objective (default; unchanged, bit-identical)
+        gap = None
+        indispensability_loss = diff / base_norm
+        total_loss = task_loss - alpha * indispensability_loss + beta * stability_loss
+        separation = diff
 
     return {
         "task_loss": task_loss,
         "indispensability_loss": indispensability_loss,
         "stability_loss": stability_loss,
         "total_loss": total_loss,
-        "separation": diff,
+        "separation": separation,
+        "gap": gap,
     }
 
 
