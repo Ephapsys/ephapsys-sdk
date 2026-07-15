@@ -74,8 +74,18 @@ def compute_indispensability_loss(
     outputs_ecm = model(**inputs, output_hidden_states=True)
     h_ecm = outputs_ecm.hidden_states[-1]
 
-    # Task loss (from model head) = CE_withΛ
-    task_loss = outputs_ecm.loss if outputs_ecm.loss is not None else torch.tensor(0.0, device=h_ecm.device)
+    # Task loss (from model head) = CE_withΛ. Require labels: if the caller
+    # omits them the model returns loss=None, and silently substituting 0 would
+    # drop the task term — turning the objective into pure divergence
+    # maximization ("wreck-to-diverge"). Fail loudly instead so the seam
+    # can't recur silently.
+    if outputs_ecm.loss is None:
+        raise ValueError(
+            "compute_indispensability_loss requires `labels` in `inputs` so the "
+            "WITH-ECM forward produces a task loss; got loss=None. "
+            "Set inputs['labels'] = inputs['input_ids'] before calling."
+        )
+    task_loss = outputs_ecm.loss
 
     # Legacy dispensability signal: relative hidden-state divergence
     diff = (h_ecm - h_base).pow(2).mean()
