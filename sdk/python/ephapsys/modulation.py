@@ -1495,9 +1495,29 @@ class ModulatorClient:
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # --- Load HF metrics ---
-        accuracy_metric = evaluate.load("accuracy")
-        loss_vals, ppl_vals = [], []
+        # --- Cached metric backends (loaded once per process, reused across trials) ---
+        _mcache = getattr(self, "_eval_metric_cache", None)
+        if _mcache is None:
+            _mcache = {}
+            for _mn in ("rouge", "bleu", "bertscore"):
+                try:
+                    _mcache[_mn] = evaluate.load(_mn)
+                except Exception as _e:
+                    _mcache[_mn] = None
+                    print(f"[WARN] metric '{_mn}' unavailable: {_e}")
+            self._eval_metric_cache = _mcache
+        rouge_metric = _mcache.get("rouge")
+        bleu_metric = _mcache.get("bleu")
+        bert_metric = _mcache.get("bertscore")
+
+        # Token-weighted loss + teacher-forced accuracy aggregators.
+        # NOTE: the shift-based token count / accuracy below are correct for
+        # causal (decoder-only) LMs. Encoder-decoder (seq2seq) models need
+        # separate handling and are out of scope for this evaluator.
+        tot_loss_tok, tot_tok = 0.0, 0
+        tot_correct, tot_acc_tok = 0, 0
+        nonfinite_loss = False   # any non-finite sample loss poisons the whole trial
+        loss_vals, ppl_vals = [], []   # per-step streaming only
 
         # --- Load dataset ---
         _ds_name = os.path.expanduser(ds_name) if ds_name else ds_name
@@ -1539,39 +1559,67 @@ class ModulatorClient:
                 padding=True
             ).to(device)
 
+            input_len = int(inputs["input_ids"].shape[1])
             with torch.no_grad():
-                # --- Loss / perplexity ---
+                # --- Loss (token-weighted) + teacher-forced next-token accuracy ---
+                labels = inputs["input_ids"].clone()
+                labels[inputs["attention_mask"] == 0] = -100   # never score padding
                 outputs_lm = model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
-                    labels=inputs["input_ids"],
+                    labels=labels,
                 )
                 loss_val = float(outputs_lm.loss.item())
-                ppl_val = math.exp(loss_val)
+                shift_labels = labels[:, 1:]
+                n_tok = int((shift_labels != -100).sum().item())   # positions the CE averaged over
+                if not math.isfinite(loss_val):
+                    nonfinite_loss = True   # diverged sample → invalidate trial (never drop silently)
+                elif n_tok > 0:
+                    tot_loss_tok += loss_val * n_tok
+                    tot_tok += n_tok
+                # teacher-forced accuracy from the same forward (no extra pass)
+                shift_logits = outputs_lm.logits[:, :-1, :]
+                tf_mask = (shift_labels != -100)
+                tf_pred = shift_logits.argmax(dim=-1)
+                s_correct = int(((tf_pred == shift_labels) & tf_mask).sum().item())
+                s_total = int(tf_mask.sum().item())
+                tot_correct += s_correct
+                tot_acc_tok += s_total
+                acc_step = (s_correct / s_total) if s_total > 0 else 0.0
+
+                loss_safe = loss_val if math.isfinite(loss_val) else 1e9
+                ppl_val = math.exp(min(loss_safe, 50.0))   # from sanitized loss → never NaN
                 loss_vals.append(loss_val)
                 ppl_vals.append(ppl_val)
 
-                # --- Generation for prediction text ---
+                # --- Generation for quality metrics: feed the PROMPT and
+                #     compare the continuation against the GOLD completion
+                #     (split on the first newline), so ROUGE/BLEU/BERT compare
+                #     like-with-like (not continuation vs the full prompt). ---
+                if "\n" in text:
+                    _prompt_str, _gold_str = text.split("\n", 1)
+                else:
+                    _prompt_str, _gold_str = text, ""
+                gen_inputs = tokenizer(
+                    _prompt_str, return_tensors="pt", truncation=True,
+                    max_length=128, padding=True,
+                ).to(device)
+                _plen = int(gen_inputs["input_ids"].shape[1])
                 gen = model.generate(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
+                    input_ids=gen_inputs["input_ids"],
+                    attention_mask=gen_inputs["attention_mask"],
                     max_new_tokens=32,
                     pad_token_id=tokenizer.eos_token_id,
                 )
-            pred_text = tokenizer.decode(gen[0], skip_special_tokens=True)
-
-            # --- Token-level overlap as proxy accuracy (for per-step streaming) ---
-            try:
-                ref_tokens = tokenizer.tokenize(text)
-                pred_tokens = tokenizer.tokenize(pred_text)
-                acc_step = len(set(ref_tokens) & set(pred_tokens)) / max(1, len(ref_tokens))
-            except Exception:
-                acc_step = 0.0
+            # Continuation only: drop the echoed prompt (causal LM); seq2seq
+            # generate() already returns just the decoded target.
+            _start = _plen if not is_seq2seq else 0
+            cont_text = tokenizer.decode(gen[0][_start:], skip_special_tokens=True)
 
             acc_steps.append(acc_step)
-
-            preds.append(pred_text)
-            refs.append(text)
+            if _gold_str:
+                preds.append(cont_text)   # matched: continuation vs gold completion
+                refs.append(_gold_str)
 
             # --- Normalize step index so each run starts at 1 ---
             if t0 is None:
@@ -1581,52 +1629,14 @@ class ModulatorClient:
             # --- Stream full KPI snapshot so baseline curve has real series ---
             metrics_step = {
                 "accuracy": acc_step,
-                "loss": loss_val,
+                "loss": loss_safe,
                 "perplexity": ppl_val,
             }
             self._report_model_metrics(model_id, metrics_step, step=t)
 
-            # --- 🆕 Stream early language-quality metrics for baseline + ephaptic runs ---
-            # Trigger lightweight quality eval every 10% of total steps
-            try:
-                if len(preds) >= 5 and (i % max(1, steps // 10) == 0 or i == steps - 1):
-                    rouge_metric = evaluate.load("rouge")
-                    bleu_metric  = evaluate.load("bleu")
-                    bert_metric  = evaluate.load("bertscore")
-
-                    # Compute partial metrics on the last few predictions for speed
-                    window_preds = preds[-10:]
-                    window_refs  = refs[-10:]
-
-                    rouge = rouge_metric.compute(
-                        predictions=window_preds, references=window_refs, use_stemmer=True
-                    )
-                    bleu  = bleu_metric.compute(
-                        predictions=window_preds, references=[[r] for r in window_refs]
-                    )
-                    bert  = bert_metric.compute(
-                        predictions=window_preds[-5:], references=window_refs[-5:],
-                        model_type="roberta-base"
-                    )
-
-                    # 🧩 Unified extraction for both float and Score.mid objects
-                    def _get_rouge(v):
-                        if hasattr(v, "mid"):
-                            return getattr(v.mid, "fmeasure", float(v.mid))
-                        return float(v)
-
-                    partial_quality = {
-                        "rouge1": float(_get_rouge(rouge.get("rouge1", 0.0))),
-                        "rouge2": float(_get_rouge(rouge.get("rouge2", 0.0))),
-                        "rougeL": float(_get_rouge(rouge.get("rougeL", 0.0))),
-                        "bleu":   float(bleu.get("bleu", 0.0)),
-                        "bertscore_f1": float(np.mean(bert.get("f1", [0]))),
-                    }
-
-                    # Stream partial metrics so baseline (Standard) curve also updates
-                    self._report_model_metrics(model_id, partial_quality, step=t)
-            except Exception as e:
-                print(f"[WARN] Early quality metric streaming skipped at step {i+1}: {e}")
+            # (Removed per-window quality streaming — it reloaded rouge/bleu/
+            # bertscore every ~10% of steps. Final quality metrics are computed
+            # once below on the cached backends, over continuation-only preds.)
 
             # --- (FIX) Ensure all known KPI keys exist in every step ---
             for key in ["rouge1", "rouge2", "rougeL", "bleu", "bertscore_f1"]:
@@ -1636,15 +1646,16 @@ class ModulatorClient:
             last = {"step": t, "total": steps, **metrics_step}
             yield last  # stream update to caller/UI
 
-        # --- Compute final aggregate metrics (mean over steps) ---
-        try:
-            _ = accuracy_metric.compute(predictions=preds, references=refs)["accuracy"]
-        except Exception as e:
-            print(f"[WARN] HF accuracy failed (ignored for mean calc): {e}")
-
-        acc_mean = float(np.mean(acc_steps)) if acc_steps else 0.0
-        loss_mean = float(np.mean(loss_vals)) if loss_vals else 0.0
-        ppl_mean  = float(np.mean(ppl_vals))  if ppl_vals  else 0.0
+        # --- Token-weighted aggregates: loss = Σ(loss·ntok)/Σntok, PPL = exp(loss) ---
+        if nonfinite_loss or tot_tok == 0:
+            # A diverged (non-finite) sample invalidates the trial: report a
+            # huge finite loss so the constrained score gates it out (unusable
+            # → ≈ −3), instead of averaging only the finite samples.
+            loss_mean = 1e9
+        else:
+            loss_mean = tot_loss_tok / tot_tok
+        ppl_mean  = math.exp(min(loss_mean, 50.0))
+        acc_mean  = (tot_correct / tot_acc_tok) if tot_acc_tok > 0 else 0.0  # token-weighted teacher-forced
 
         metrics_final = {
             "accuracy": acc_mean,
@@ -1654,16 +1665,14 @@ class ModulatorClient:
 
         # --- ✅ Compute language-quality metrics on accumulated predictions ---
         try:
-            rouge_metric = evaluate.load("rouge")
-            bleu_metric  = evaluate.load("bleu")
-            bert_metric  = evaluate.load("bertscore")
-
-            rouge = rouge_metric.compute(predictions=preds, references=refs)
+            if rouge_metric is None or bleu_metric is None or bert_metric is None:
+                raise RuntimeError("metric backend unavailable (cached load failed)")
+            rouge = rouge_metric.compute(predictions=preds, references=refs, use_stemmer=True)
             bleu  = bleu_metric.compute(predictions=preds, references=[[r] for r in refs])
             bert  = bert_metric.compute(
                 predictions=preds,
                 references=refs,
-                model_type="roberta-large-mnli",  # balanced semantic model
+                model_type="roberta-large",
             )
 
             # 🧩 Unified extraction to support both old/new evaluate APIs
