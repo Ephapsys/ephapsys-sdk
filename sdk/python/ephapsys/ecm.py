@@ -250,12 +250,35 @@ def inject_ecm(module: nn.Module,
     #  Attach hook only to modules matching the main hidden_dim
     #  (prevents constant resizing like 384↔512↔1024 in T5)
     # ============================================================
+    # HF GPT-2-style Conv1D projections (attn/mlp c_proj) have output dim = nf
+    # and are NOT nn.Linear. Import lazily so the SDK doesn't hard-require
+    # transformers. Matching nf == hidden_dim gives the same semantic injection
+    # points as o_proj/down_proj do on nn.Linear models.
+    try:
+        from transformers.pytorch_utils import Conv1D as _HFConv1D
+    except Exception:
+        _HFConv1D = None
+
+    n_hooks = 0
     for name, sub in module.named_modules():
+        out_features = None
         if isinstance(sub, nn.Linear):
             out_features = getattr(sub, "out_features", None)
-            if out_features == hidden_dim:
-                sub.register_forward_hook(_hook)
-                logger.debug("[ECM] Attached hook to %s (dim=%s)", name, out_features)
+        elif _HFConv1D is not None and isinstance(sub, _HFConv1D):
+            out_features = getattr(sub, "nf", None)      # Conv1D output dim
+        if out_features == hidden_dim:
+            sub.register_forward_hook(_hook)
+            n_hooks += 1
+            logger.debug("[ECM] Attached hook to %s (dim=%s)", name, out_features)
+
+    # Fail fast: a registered-but-unhooked Λ is a silent no-op (e.g. GPT-2 with
+    # a pre-Conv1D SDK) — an AOC search over it would be meaningless.
+    if n_hooks == 0:
+        raise RuntimeError(
+            f"[ECM] inject_ecm attached 0 hooks (hidden_dim={hidden_dim}): no "
+            f"nn.Linear/Conv1D module has output dim == hidden_dim. ECM would be "
+            f"a no-op — check the model architecture / hidden_dim.")
+    logger.info("[ECM] Attached %d hook(s) at hidden_dim=%d", n_hooks, hidden_dim)
 
     # ✅ Return both module and Λ (trainable) for optimizer inclusion and saving
     return module, Lambda
