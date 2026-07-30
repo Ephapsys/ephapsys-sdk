@@ -60,3 +60,6 @@ scripts/.release-venv/
 !*.env.example
 !*.env.*.example
 !*.env-*.example
+
+# Local issue drafts — staged here before filing, never part of the package.
+.github/ISSUE_DRAFTS/
