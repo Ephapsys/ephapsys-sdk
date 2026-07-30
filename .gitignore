@@ -63,3 +63,10 @@ scripts/.release-venv/
 
 # Local issue drafts — staged here before filing, never part of the package.
 .github/ISSUE_DRAFTS/
+
+# Credential material — never commit, even locally generated.
+*.pem
+*.key
+id_rsa
+id_ed25519
+secrets.json
