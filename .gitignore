@@ -44,3 +44,29 @@ dist/
 build/
 scripts/venvs/
 scripts/.release-venv/
+
+# Local environment files may contain credentials. Commit templates only.
+.env
+.env.*
+.env-*
+.env~
+*.env
+*.env.*
+*.env-*
+*.env~
+!.env.example
+!.env.*.example
+!.env-*.example
+!*.env.example
+!*.env.*.example
+!*.env-*.example
+
+# Local issue drafts — staged here before filing, never part of the package.
+.github/ISSUE_DRAFTS/
+
+# Credential material — never commit, even locally generated.
+*.pem
+*.key
+id_rsa
+id_ed25519
+secrets.json
