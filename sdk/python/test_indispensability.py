@@ -12,8 +12,12 @@ from ephapsys.ecm import inject_ecm
 from ephapsys.modulation import compute_indispensability_loss, run_ablation_probe
 
 
-def _make_tiny_model():
-    """Create a minimal causal LM-like model for testing."""
+def _make_tiny_model(dropout=0.0, raise_on_call=None):
+    """Create a minimal causal LM-like model for testing.
+
+    ``raise_on_call``: if set, the N-th forward() call (1-indexed) raises
+    RuntimeError instead of returning, to test exception-safety.
+    """
     class TinyLM(nn.Module):
         def __init__(self, vocab_size=100, hidden_dim=32, num_layers=2):
             super().__init__()
@@ -21,13 +25,19 @@ def _make_tiny_model():
             self.embed = nn.Embedding(vocab_size, hidden_dim)
             self.layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_layers)])
             self.head = nn.Linear(hidden_dim, vocab_size)
+            self.drop = nn.Dropout(dropout)
             self.loss_fn = nn.CrossEntropyLoss()
+            self._call_count = 0
 
         def forward(self, input_ids, labels=None, output_hidden_states=False, **kwargs):
+            self._call_count += 1
+            if raise_on_call is not None and self._call_count == raise_on_call:
+                raise RuntimeError("synthetic forward failure for exception-safety test")
             h = self.embed(input_ids)
             hidden_states = [h] if output_hidden_states else None
             for layer in self.layers:
                 h = torch.relu(layer(h))
+                h = self.drop(h)
                 if output_hidden_states:
                     hidden_states.append(h)
             logits = self.head(h)
@@ -65,8 +75,13 @@ def test_compute_indispensability_loss():
     assert "total_loss" in result, "Missing total_loss"
     assert "separation" in result, "Missing separation"
 
-    # All should be tensors
+    # All should be tensors, except `gap`, which is only populated in
+    # objective="hinge" mode - the default "dispensability" objective legitimately
+    # returns gap=None (kept as a dict key for consumers that expect it to exist).
     for k, v in result.items():
+        if k == "gap":
+            assert v is None, f"gap should be None for the default objective, got {type(v)}"
+            continue
         assert isinstance(v, torch.Tensor), f"{k} should be Tensor, got {type(v)}"
 
     # Indispensability loss should be >= 0
@@ -154,8 +169,144 @@ def test_hooks_restored_after_probe():
     print("  PASSED\n")
 
 
+def test_dropout_disabled_and_mode_restored():
+    """SDK-03: paired forwards must run with dropout off, and the caller's
+    training mode must be restored afterward regardless of what it was."""
+    print("Testing dropout disabled + training-mode restoration...")
+    model = _make_tiny_model(dropout=0.9)  # aggressive, to make leaked noise obvious
+    hidden_dim = model.config.hidden_size
+    inject_ecm(model, epsilon=0.5, lambda_init_mag=0.01, phi="identity",
+               ecm_init="identity", variant="multiplicative", hidden_dim=hidden_dim)
+
+    input_ids = torch.randint(0, 100, (2, 10))
+    labels = torch.randint(0, 100, (2, 10))
+    inputs = {"input_ids": input_ids, "labels": labels}
+
+    for was_training in (True, False):
+        model.train(was_training)
+        compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01)
+        assert model.training == was_training, \
+            f"training mode not restored: expected {was_training}, got {model.training}"
+
+    # With dropout at 0.9, if it were still active during the paired forwards,
+    # separation would vary run-to-run even with everything else fixed. With
+    # eval() enforced internally, two calls must agree exactly.
+    model.train()
+    r1 = compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01)
+    r2 = compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01)
+    assert torch.allclose(r1["separation"], r2["separation"]), \
+        "separation differs across calls - dropout is leaking into the paired forwards"
+    print("  PASSED\n")
+
+
+def test_unrelated_hooks_preserved_with_order():
+    """SDK-04: non-ECM hooks on a module that also carries an ECM hook must
+    survive the no-Lambda branch AND actually fire during it, in their
+    original relative order. Checking hook presence only after completion is
+    not enough - the old "clear everything, then restore" behavior would also
+    leave the right keys present afterward, while still failing to fire the
+    foreign hooks during the no-Lambda forward."""
+    print("Testing unrelated-hook preservation, ordering, and firing...")
+    model = _make_tiny_model()
+    hidden_dim = model.config.hidden_size
+
+    calls_before, calls_after = [], []
+
+    def foreign_before(mod, inp, out):
+        calls_before.append(1)
+    handle_before = model.layers[0].register_forward_hook(foreign_before)
+
+    inject_ecm(model, epsilon=0.5, lambda_init_mag=0.01, phi="identity",
+               ecm_init="identity", variant="multiplicative", hidden_dim=hidden_dim)
+
+    def foreign_after(mod, inp, out):
+        calls_after.append(1)
+    handle_after = model.layers[0].register_forward_hook(foreign_after)
+
+    hooks_dict = model.layers[0]._forward_hooks
+    keys_before = list(hooks_dict.keys())
+    assert handle_before.id in keys_before and handle_after.id in keys_before, \
+        "test setup sanity check failed: expected hooks not present"
+
+    input_ids = torch.randint(0, 100, (2, 10))
+    labels = torch.randint(0, 100, (2, 10))
+    inputs = {"input_ids": input_ids, "labels": labels}
+    compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01)
+
+    keys_after = list(hooks_dict.keys())
+    assert keys_after == keys_before, \
+        f"hook order changed: {keys_before} -> {keys_after}"
+
+    # Two forwards happen (no-Lambda, with-Lambda); a foreign hook that only
+    # fires once means it was skipped during one of them - the exact bug the
+    # old "clear every _forward_hooks dict" implementation had.
+    assert len(calls_before) == 2, \
+        f"foreign_before should fire during BOTH forwards, fired {len(calls_before)}x"
+    assert len(calls_after) == 2, \
+        f"foreign_after should fire during BOTH forwards, fired {len(calls_after)}x"
+    print("  PASSED\n")
+
+
+def test_zero_ecm_hooks_raises():
+    """SDK-04: with zero ECM hooks attached, the with/without forwards would be
+    byte-identical (gap silently reads 0.0) - must raise instead."""
+    print("Testing zero-ECM-hooks guard...")
+    model = _make_tiny_model()  # no inject_ecm() call - no ECM hooks anywhere
+
+    input_ids = torch.randint(0, 100, (2, 10))
+    labels = torch.randint(0, 100, (2, 10))
+    inputs = {"input_ids": input_ids, "labels": labels}
+
+    try:
+        compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01)
+        raise AssertionError("expected RuntimeError for zero ECM hooks, none raised")
+    except RuntimeError as e:
+        assert "No Ephapsys ECM forward hooks found" in str(e)
+    print("  PASSED\n")
+
+
+def test_restoration_after_exception():
+    """Hooks and training mode must be restored even if the WITHOUT-ECM
+    forward (inside the hook-disable context) raises."""
+    print("Testing restoration after an exception in the no-Lambda forward...")
+    model = _make_tiny_model(raise_on_call=1)  # first forward() call raises
+    hidden_dim = model.config.hidden_size
+    inject_ecm(model, epsilon=0.5, lambda_init_mag=0.01, phi="identity",
+               ecm_init="identity", variant="multiplicative", hidden_dim=hidden_dim)
+
+    hooks_before = {
+        name: list(mod._forward_hooks.keys()) for name, mod in model.named_modules()
+        if hasattr(mod, "_forward_hooks") and mod._forward_hooks
+    }
+
+    input_ids = torch.randint(0, 100, (2, 10))
+    labels = torch.randint(0, 100, (2, 10))
+    inputs = {"input_ids": input_ids, "labels": labels}
+
+    model.train()
+    raised = False
+    try:
+        compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01)
+    except RuntimeError:
+        raised = True
+    assert raised, "expected the synthetic forward failure to propagate"
+
+    assert model.training is True, "training mode not restored after exception"
+    hooks_after = {
+        name: list(mod._forward_hooks.keys()) for name, mod in model.named_modules()
+        if hasattr(mod, "_forward_hooks") and mod._forward_hooks
+    }
+    assert hooks_after == hooks_before, \
+        f"hooks not restored after exception: {hooks_before} -> {hooks_after}"
+    print("  PASSED\n")
+
+
 if __name__ == "__main__":
     test_compute_indispensability_loss()
     test_run_ablation_probe()
     test_hooks_restored_after_probe()
+    test_dropout_disabled_and_mode_restored()
+    test_unrelated_hooks_preserved_with_order()
+    test_zero_ecm_hooks_raises()
+    test_restoration_after_exception()
     print("All tests passed!")

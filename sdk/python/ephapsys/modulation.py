@@ -1,11 +1,59 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, Iterable, Optional
-import os, json, hashlib, requests, torch, logging
+import contextlib, os, json, hashlib, requests, torch, logging
 import torch.nn as nn
 from ephapsys.ecm import inject_ecm
 
 _log = logging.getLogger("ephapsys.modulation")
 _debug = os.getenv("EPHAPSYS_DEBUG", "0") == "1"
+
+
+def _is_ecm_forward_hook(hook):
+    """Return true only for the forward hook installed by ephapsys.ecm."""
+    return (
+        getattr(hook, "__module__", "") == "ephapsys.ecm"
+        and getattr(hook, "__name__", "") == "_hook"
+    )
+
+
+@contextlib.contextmanager
+def temporarily_disable_ecm_hooks(model: nn.Module):
+    """Disable only Ephapsys ECM hooks and restore them exactly afterward.
+
+    Clearing every forward hook (the previous behavior) also removes unrelated
+    instrumentation and framework hooks, and doesn't notice when zero ECM hooks
+    exist — silently making the with/without branches byte-identical.
+    """
+    affected = []
+    for module in model.modules():
+        hooks = getattr(module, "_forward_hooks", None)
+        if not hooks:
+            continue
+        original = list(hooks.items())
+        ecm_keys = [key for key, hook in original if _is_ecm_forward_hook(hook)]
+        if ecm_keys:
+            affected.append((hooks, original))
+            for key in ecm_keys:
+                del hooks[key]
+    if not affected:
+        raise RuntimeError(
+            "No Ephapsys ECM forward hooks found while constructing the no-Λ "
+            "branch; refusing to score a false paired objective."
+        )
+    try:
+        yield
+    finally:
+        for hooks, original in affected:
+            # Rebuild the original order; hook order can affect model output.
+            # Preserve any genuinely new hooks registered during the context.
+            original_keys = {key for key, _ in original}
+            additions = [
+                (key, hook) for key, hook in hooks.items()
+                if key not in original_keys
+            ]
+            hooks.clear()
+            hooks.update(original)
+            hooks.update(additions)
 
 
 # ------------------------------------------------------------
@@ -53,75 +101,72 @@ def compute_indispensability_loss(
             ``separation``: legacy MSE ``diff`` (dispensability) or ``gap`` (hinge).
             ``gap``: CE gap tensor in ``"hinge"`` mode, else ``None``.
     """
-    # --- Step 1: Forward WITHOUT ECM (temporarily disable hooks) ---
-    saved_hooks: Dict[str, dict] = {}
-    for name, mod in model.named_modules():
-        if hasattr(mod, '_forward_hooks') and mod._forward_hooks:
-            saved_hooks[name] = dict(mod._forward_hooks)
-            mod._forward_hooks.clear()
+    # Both forwards run with dropout OFF and are restored to the caller's prior
+    # mode afterward, so Λ is the only difference between them (SDK-03: dropout
+    # was previously active on both branches, injecting noise into the gap).
+    was_training = model.training
+    model.eval()
+    try:
+        # --- Step 1: Forward WITHOUT ECM (disable only ECM's own hooks) ---
+        with temporarily_disable_ecm_hooks(model), torch.no_grad():
+            outputs_no_ecm = model(**inputs, output_hidden_states=True)
+            h_base = outputs_no_ecm.hidden_states[-1].detach()
+            ce_no_ecm = outputs_no_ecm.loss  # None unless `labels` in inputs (hinge)
 
-    with torch.no_grad():
-        outputs_no_ecm = model(**inputs, output_hidden_states=True)
-        h_base = outputs_no_ecm.hidden_states[-1].detach()
-        ce_no_ecm = outputs_no_ecm.loss  # None unless `labels` in inputs (hinge)
+        # --- Step 2: Forward WITH ECM ---
+        outputs_ecm = model(**inputs, output_hidden_states=True)
+        h_ecm = outputs_ecm.hidden_states[-1]
 
-    # Restore hooks
-    for name, mod in model.named_modules():
-        if name in saved_hooks:
-            mod._forward_hooks.update(saved_hooks[name])
-
-    # --- Step 2: Forward WITH ECM ---
-    outputs_ecm = model(**inputs, output_hidden_states=True)
-    h_ecm = outputs_ecm.hidden_states[-1]
-
-    # Task loss (from model head) = CE_withΛ. Require labels: if the caller
-    # omits them the model returns loss=None, and silently substituting 0 would
-    # drop the task term — turning the objective into pure divergence
-    # maximization ("wreck-to-diverge"). Fail loudly instead so the seam
-    # can't recur silently.
-    if outputs_ecm.loss is None:
-        raise ValueError(
-            "compute_indispensability_loss requires `labels` in `inputs` so the "
-            "WITH-ECM forward produces a task loss; got loss=None. "
-            "Set inputs['labels'] = inputs['input_ids'] before calling."
-        )
-    task_loss = outputs_ecm.loss
-
-    # Legacy dispensability signal: relative hidden-state divergence
-    diff = (h_ecm - h_base).pow(2).mean()
-    base_norm = h_base.pow(2).mean().clamp(min=1e-8)
-
-    # Stability = Λ Frobenius norm
-    stability_loss = torch.tensor(0.0, device=h_ecm.device)
-    for param_name, param in model.named_parameters():
-        if "lambda_ecm" in param_name:
-            stability_loss = param.pow(2).mean()
-            break
-
-    if objective == "hinge":
-        if ce_no_ecm is None:
+        # Task loss (from model head) = CE_withΛ. Require labels: if the caller
+        # omits them the model returns loss=None, and silently substituting 0 would
+        # drop the task term — turning the objective into pure divergence
+        # maximization ("wreck-to-diverge"). Fail loudly instead so the seam
+        # can't recur silently.
+        if outputs_ecm.loss is None:
             raise ValueError(
-                "compute_indispensability_loss(objective='hinge') requires `labels` in inputs")
-        gap = ce_no_ecm.detach() - task_loss
-        indispensability_loss = torch.relu(
-            torch.as_tensor(margin, device=task_loss.device, dtype=task_loss.dtype) - gap)
-        total_loss = task_loss + alpha * indispensability_loss + beta * stability_loss
-        separation = gap  # keep key present for existing consumers
-    else:
-        # Legacy dispensability objective (default; unchanged, bit-identical)
-        gap = None
-        indispensability_loss = diff / base_norm
-        total_loss = task_loss - alpha * indispensability_loss + beta * stability_loss
-        separation = diff
+                "compute_indispensability_loss requires `labels` in `inputs` so the "
+                "WITH-ECM forward produces a task loss; got loss=None. "
+                "Set inputs['labels'] = inputs['input_ids'] before calling."
+            )
+        task_loss = outputs_ecm.loss
 
-    return {
-        "task_loss": task_loss,
-        "indispensability_loss": indispensability_loss,
-        "stability_loss": stability_loss,
-        "total_loss": total_loss,
-        "separation": separation,
-        "gap": gap,
-    }
+        # Legacy dispensability signal: relative hidden-state divergence
+        diff = (h_ecm - h_base).pow(2).mean()
+        base_norm = h_base.pow(2).mean().clamp(min=1e-8)
+
+        # Stability = Λ Frobenius norm
+        stability_loss = torch.tensor(0.0, device=h_ecm.device)
+        for param_name, param in model.named_parameters():
+            if "lambda_ecm" in param_name:
+                stability_loss = param.pow(2).mean()
+                break
+
+        if objective == "hinge":
+            if ce_no_ecm is None:
+                raise ValueError(
+                    "compute_indispensability_loss(objective='hinge') requires `labels` in inputs")
+            gap = ce_no_ecm.detach() - task_loss
+            indispensability_loss = torch.relu(
+                torch.as_tensor(margin, device=task_loss.device, dtype=task_loss.dtype) - gap)
+            total_loss = task_loss + alpha * indispensability_loss + beta * stability_loss
+            separation = gap  # keep key present for existing consumers
+        else:
+            # Legacy dispensability objective (default; unchanged, bit-identical)
+            gap = None
+            indispensability_loss = diff / base_norm
+            total_loss = task_loss - alpha * indispensability_loss + beta * stability_loss
+            separation = diff
+
+        return {
+            "task_loss": task_loss,
+            "indispensability_loss": indispensability_loss,
+            "stability_loss": stability_loss,
+            "total_loss": total_loss,
+            "separation": separation,
+            "gap": gap,
+        }
+    finally:
+        model.train(was_training)
 
 
 def run_ablation_probe(
