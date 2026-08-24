@@ -1558,16 +1558,41 @@ class ModulatorClient:
         model,
         tokenizer,
         model_id: str,
-        ds_name: str = "wikitext",
-        ds_config: str = "wikitext-103-raw-v1",
-        ds_split: str = "train[:1%]",
+        ds_name: str,
+        ds_config: Optional[str] = None,
+        ds_split: Optional[str] = None,
         steps: int = 50,
     ):
         """
         Streaming evaluation for both Seq2Seq (e.g. Flan-T5) and Causal LM (e.g. GPT-2).
         Uses Hugging Face `evaluate` to compute final aggregate metrics
         while still streaming per-step progress and KPIs to AOC.
+
+        ``ds_name`` is required (no default) so a caller that omits the
+        dataset can't be silently scored on WikiText regardless of what the
+        model actually trained on. ``ds_split`` is required too, UNLESS
+        ``ds_name``/``ds_config`` resolves to a local file — the local-file
+        branch below hardcodes ``split="train"`` and never reads ``ds_split``,
+        so there's nothing for an omitted split to silently default. For any
+        remote dataset, ``ds_split`` stays required: a caller silently getting
+        an unintended split (e.g. training data as "held-out") is exactly the
+        failure this closes.
         """
+        if not ds_name:
+            raise ValueError(
+                "compute_language_metrics_stream requires `ds_name` (a dataset "
+                "repo name or local file path) - no default, to prevent a "
+                "silent fallback to WikiText."
+            )
+        _name_is_local_file = os.path.isfile(os.path.expanduser(ds_name))
+        _config_is_local_file = bool(ds_config) and os.path.isfile(os.path.expanduser(ds_config))
+        if not ds_split and not (_name_is_local_file or _config_is_local_file):
+            raise ValueError(
+                "compute_language_metrics_stream requires `ds_split` when "
+                "`ds_name` is a remote dataset - no default, to prevent a "
+                "silent fallback to a training split. `ds_split` may be "
+                "omitted only when ds_name/ds_config resolves to a local file."
+            )
         import math, evaluate
         from datasets import load_dataset
         import torch, transformers
@@ -1846,15 +1871,25 @@ class ModulatorClient:
         model,
         processor,
         model_id: str,
-        ds_name: str = "librispeech_asr",
-        ds_config: str = "clean",
-        ds_split: str = "validation[:100]",
+        ds_name: str,
+        ds_config: str,
+        ds_split: str,
         steps: int = 50,
     ):
         """
         Streaming evaluation for STT models (Whisper).
         Yields {"step": i, "total": steps, "wer": ...}
+
+        ``ds_name``/``ds_config``/``ds_split`` are required (no default) so a
+        caller that omits them can't be silently scored on LibriSpeech
+        regardless of what the model actually trained on.
         """
+        if not ds_name or not ds_config or not ds_split:
+            raise ValueError(
+                "compute_stt_metrics_stream requires ds_name, ds_config, and "
+                "ds_split - no defaults, to prevent a silent fallback to "
+                "LibriSpeech."
+            )
         import evaluate
         from datasets import load_dataset, Audio
         device = "cuda" if torch.cuda.is_available() else "cpu"
