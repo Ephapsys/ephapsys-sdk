@@ -160,11 +160,15 @@ def inject_ecm(module: nn.Module,
     if ecm_init == "transpose":
         Lambda_np = np.eye(hidden_dim)[::-1].copy() * lambda_init_mag
     elif ecm_init == "random":
-        Lambda_np = np.random.randn(hidden_dim, hidden_dim) * lambda_init_mag
+        # torch.randn (not np.random.randn): honors torch.manual_seed(), so a
+        # caller that seeds torch for reproducibility (e.g. per-trial AOC
+        # search seeding) gets a reproducible Λ too, without needing to also
+        # seed NumPy's separate global RNG.
+        Lambda_np = torch.randn(hidden_dim, hidden_dim).numpy() * lambda_init_mag
     elif ecm_init == "identity":
         Lambda_np = np.eye(hidden_dim) * lambda_init_mag
     elif ecm_init == "topk_from_WT":
-        W_T = np.random.randn(hidden_dim, hidden_dim)
+        W_T = torch.randn(hidden_dim, hidden_dim).numpy()
         Lambda_np = lambda_init_mag * W_T
         for i in range(hidden_dim):
             row = Lambda_np[i]
