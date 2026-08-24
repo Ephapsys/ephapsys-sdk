@@ -56,6 +56,21 @@ def temporarily_disable_ecm_hooks(model: nn.Module):
             hooks.update(additions)
 
 
+def bounded_indispensability(raw_ratio: torch.Tensor) -> torch.Tensor:
+    """Map a non-negative removal-sensitivity ratio to ``[0, 1)``.
+
+    The legacy ``"dispensability"`` objective maximizes ``raw_ratio`` directly.
+    Because that ratio is unbounded, the cheapest optimization path is to
+    inflate the authorized hidden-state norm, even when doing so destroys
+    authorized evaluation (see platform#156). The monotonic transform below
+    preserves the ordering and the zero point while making the maximum
+    auxiliary reward finite: ``bounded = raw / (1 + raw)``. It also makes the
+    auxiliary gradient decay as the requested separation is achieved, so task
+    loss remains the dominant long-run objective.
+    """
+    return raw_ratio / (1.0 + raw_ratio)
+
+
 # ------------------------------------------------------------
 # Indispensability: Family D loss + ablation probe
 # ------------------------------------------------------------
@@ -71,10 +86,20 @@ def compute_indispensability_loss(
     """
     Compute Family D indispensability loss components.
 
-    Two objectives are supported:
+    Three objectives are supported:
 
-    - ``"dispensability"`` (default; back-compat): the original unbounded
-      hidden-state divergence reward. ``total = task - alpha*divergence + beta*stab``.
+    - ``"dispensability"`` (default, for now — back-compat with existing
+      callers/teams still on this default; switch to ``"bounded"`` when ready):
+      the original unbounded hidden-state divergence reward.
+      ``total = task - alpha*divergence + beta*stab``. Unbounded — the
+      cheapest optimization path is inflating the authorized hidden-state
+      norm, which is the mechanism behind the indispensability retraction
+      (research RES-10, platform#156). Prefer ``"bounded"`` for new training.
+    - ``"bounded"``: ``raw = diff/base_norm`` mapped through
+      ``bounded_indispensability`` to ``[0, 1)``. ``total = task - alpha*bounded + beta*stab``.
+      Monotonic in ``raw`` (config ordering from the legacy objective survives),
+      but the reward saturates instead of paying out unboundedly for wrecking
+      the authorized hidden state.
     - ``"hinge"``: bounded gap objective. ``gap = CE_noΛ(no_grad) - CE_withΛ``;
       ``total = CE_withΛ + alpha*relu(margin - gap) + beta*stab``. The noΛ branch
       is detached, so the only gradient path shrinks the penalty by improving the
@@ -90,17 +115,25 @@ def compute_indispensability_loss(
         alpha: Weight for indispensability loss (higher = stronger coupling).
         beta: Weight for stability loss (prevents Λ norm explosion).
         margin: Target CE gap for the ``"hinge"`` objective (nats). Ignored otherwise.
-        objective: ``"dispensability"`` (default) or ``"hinge"``.
+        objective: ``"dispensability"`` (default, for now), ``"bounded"``, or ``"hinge"``.
 
     Returns:
         Dict with keys:
             ``task_loss``: Standard forward-pass loss (= CE_withΛ).
-            ``indispensability_loss``: divergence (legacy) or ``relu(margin - gap)`` (hinge).
+            ``indispensability_loss``: bounded/divergence (legacy) or ``relu(margin - gap)`` (hinge).
             ``stability_loss``: Λ Frobenius norm regularizer.
             ``total_loss``: combined objective (see above).
-            ``separation``: legacy MSE ``diff`` (dispensability) or ``gap`` (hinge).
+            ``separation``: raw MSE ``diff`` (bounded/dispensability) or ``gap`` (hinge).
             ``gap``: CE gap tensor in ``"hinge"`` mode, else ``None``.
+
+    Raises:
+        ValueError: if ``objective`` is not one of the three supported values.
     """
+    supported_objectives = {"bounded", "dispensability", "hinge"}
+    if objective not in supported_objectives:
+        raise ValueError(
+            f"Unknown objective={objective!r}; expected one of {sorted(supported_objectives)}"
+        )
     # Both forwards run with dropout OFF and are restored to the caller's prior
     # mode afterward, so Λ is the only difference between them (SDK-03: dropout
     # was previously active on both branches, injecting noise into the gap).
@@ -151,9 +184,14 @@ def compute_indispensability_loss(
             total_loss = task_loss + alpha * indispensability_loss + beta * stability_loss
             separation = gap  # keep key present for existing consumers
         else:
-            # Legacy dispensability objective (default; unchanged, bit-identical)
+            # "bounded" (opt-in) or "dispensability" (legacy, still the
+            # default; unchanged, bit-identical to pre-SDK-09 behavior).
             gap = None
-            indispensability_loss = diff / base_norm
+            raw_indispensability = diff / base_norm
+            indispensability_loss = (
+                bounded_indispensability(raw_indispensability)
+                if objective == "bounded" else raw_indispensability
+            )
             total_loss = task_loss - alpha * indispensability_loss + beta * stability_loss
             separation = diff
 

@@ -9,7 +9,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 import torch
 import torch.nn as nn
 from ephapsys.ecm import inject_ecm
-from ephapsys.modulation import compute_indispensability_loss, run_ablation_probe
+from ephapsys.modulation import (
+    compute_indispensability_loss, run_ablation_probe, bounded_indispensability,
+)
 
 
 def _make_tiny_model(dropout=0.0, raise_on_call=None):
@@ -301,6 +303,110 @@ def test_restoration_after_exception():
     print("  PASSED\n")
 
 
+def _paired_inputs():
+    model = _make_tiny_model()
+    hidden_dim = model.config.hidden_size
+    inject_ecm(model, epsilon=0.5, lambda_init_mag=0.01, phi="identity",
+               ecm_init="identity", variant="multiplicative", hidden_dim=hidden_dim)
+    input_ids = torch.randint(0, 100, (2, 10))
+    labels = torch.randint(0, 100, (2, 10))
+    return model, {"input_ids": input_ids, "labels": labels}
+
+
+def test_default_objective_is_dispensability():
+    """SDK-09 (default kept at "dispensability" for now, per team decision -
+    "bounded" is implemented and available, just not yet the default). This
+    test pins the current default explicitly, so a future change to it is a
+    deliberate edit here, not an accidental drift."""
+    print("Testing default objective is dispensability (bounded available, not default)...")
+    model, inputs = _paired_inputs()
+    torch.manual_seed(0)
+    r_default = compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01)
+    torch.manual_seed(0)
+    r_explicit_dispensability = compute_indispensability_loss(
+        model, inputs, alpha=10.0, beta=0.01, objective="dispensability")
+    assert torch.allclose(r_default["indispensability_loss"], r_explicit_dispensability["indispensability_loss"]), \
+        "default objective does not match objective='dispensability'"
+    print("  PASSED\n")
+
+
+def test_bounded_stays_in_unit_interval_even_for_large_raw_ratio():
+    """SDK-09: unlike "dispensability", "bounded" must not blow up as the raw
+    divergence ratio grows large - that unboundedness was the exploit."""
+    print("Testing bounded objective stays in [0, 1) for large raw ratios...")
+    # 1e9 is excluded: raw/(1+raw) at that magnitude rounds to exactly 1.0 in
+    # float32 (a representable-precision artifact, not a logic bug - the
+    # underlying math raw/(1+raw) < 1 holds for any finite raw).
+    for raw in (0.0, 1.0, 1000.0, 1e6):
+        b = bounded_indispensability(torch.tensor(raw))
+        assert 0.0 <= b.item() < 1.0, f"bounded_indispensability({raw}) = {b.item()} not in [0, 1)"
+    # Monotonic: larger raw ratio -> larger (but still bounded) reward.
+    assert bounded_indispensability(torch.tensor(10.0)) > bounded_indispensability(torch.tensor(1.0))
+    print("  PASSED\n")
+
+
+def test_dispensability_legacy_still_bit_identical():
+    """SDK-09: objective="dispensability" must remain the raw, unbounded
+    ratio - not routed through bounded_indispensability() - so old runs stay
+    reproducible. A near-zero raw ratio can't distinguish raw from
+    raw/(1+raw) (they converge as raw->0), so use injection params that
+    produce a large, clearly-distinguishing raw ratio."""
+    print("Testing legacy dispensability objective is unchanged...")
+    model = _make_tiny_model()
+    hidden_dim = model.config.hidden_size
+    inject_ecm(model, epsilon=1.0, lambda_init_mag=1.0, phi="identity",
+               ecm_init="random", variant="multiplicative", hidden_dim=hidden_dim)
+    input_ids = torch.randint(0, 100, (2, 10))
+    labels = torch.randint(0, 100, (2, 10))
+    inputs = {"input_ids": input_ids, "labels": labels}
+
+    result = compute_indispensability_loss(
+        model, inputs, alpha=10.0, beta=0.01, objective="dispensability")
+    raw = result["indispensability_loss"]
+    assert raw.item() > 1.0, \
+        f"test setup failed to produce a large raw ratio (got {raw.item()}); can't distinguish objectives"
+    bounded_version = bounded_indispensability(raw)
+    assert bounded_version.item() < 1.0, "bounded_indispensability should saturate below 1"
+    assert not torch.allclose(raw, bounded_version), \
+        "dispensability objective appears to have been bounded - regression"
+    print("  PASSED\n")
+
+
+def test_bounded_equals_transform_of_dispensability():
+    """SDK-09: objective="bounded" must equal bounded_indispensability() applied
+    to objective="dispensability"'s raw ratio, for the same model/inputs - i.e.
+    "bounded" really is just the legacy ratio run through the transform, not a
+    separately-computed value that happens to look similar."""
+    print("Testing bounded == bounded_indispensability(dispensability)...")
+    model, inputs = _paired_inputs()
+
+    torch.manual_seed(0)
+    r_dispensability = compute_indispensability_loss(
+        model, inputs, alpha=10.0, beta=0.01, objective="dispensability")
+    torch.manual_seed(0)
+    r_bounded = compute_indispensability_loss(
+        model, inputs, alpha=10.0, beta=0.01, objective="bounded")
+
+    expected = bounded_indispensability(r_dispensability["indispensability_loss"])
+    assert torch.allclose(r_bounded["indispensability_loss"], expected), \
+        (f"bounded ({r_bounded['indispensability_loss'].item()}) != "
+         f"bounded_indispensability(dispensability) ({expected.item()})")
+    print("  PASSED\n")
+
+
+def test_invalid_objective_raises():
+    """SDK-09: an unrecognized objective must fail loudly, not silently fall
+    through to legacy behavior."""
+    print("Testing invalid objective raises ValueError...")
+    model, inputs = _paired_inputs()
+    try:
+        compute_indispensability_loss(model, inputs, alpha=10.0, beta=0.01, objective="not-a-real-objective")
+        raise AssertionError("expected ValueError for an unknown objective, none raised")
+    except ValueError as e:
+        assert "Unknown objective" in str(e)
+    print("  PASSED\n")
+
+
 if __name__ == "__main__":
     test_compute_indispensability_loss()
     test_run_ablation_probe()
@@ -309,4 +415,9 @@ if __name__ == "__main__":
     test_unrelated_hooks_preserved_with_order()
     test_zero_ecm_hooks_raises()
     test_restoration_after_exception()
+    test_default_objective_is_dispensability()
+    test_bounded_stays_in_unit_interval_even_for_large_raw_ratio()
+    test_dispensability_legacy_still_bit_identical()
+    test_bounded_equals_transform_of_dispensability()
+    test_invalid_objective_raises()
     print("All tests passed!")
