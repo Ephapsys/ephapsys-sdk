@@ -62,7 +62,7 @@ def bounded_indispensability(raw_ratio: torch.Tensor) -> torch.Tensor:
     The legacy ``"dispensability"`` objective maximizes ``raw_ratio`` directly.
     Because that ratio is unbounded, the cheapest optimization path is to
     inflate the authorized hidden-state norm, even when doing so destroys
-    authorized evaluation (see platform#156). The monotonic transform below
+    authorized evaluation. The monotonic transform below
     preserves the ordering and the zero point while making the maximum
     auxiliary reward finite: ``bounded = raw / (1 + raw)``. It also makes the
     auxiliary gradient decay as the requested separation is achieved, so task
@@ -93,8 +93,8 @@ def compute_indispensability_loss(
       the original unbounded hidden-state divergence reward.
       ``total = task - alpha*divergence + beta*stab``. Unbounded — the
       cheapest optimization path is inflating the authorized hidden-state
-      norm, which is the mechanism behind the indispensability retraction
-      (research RES-10, platform#156). Prefer ``"bounded"`` for new training.
+      norm, which can degrade the authorized model while still scoring well.
+      Prefer ``"bounded"`` for new training.
     - ``"bounded"``: ``raw = diff/base_norm`` mapped through
       ``bounded_indispensability`` to ``[0, 1)``. ``total = task - alpha*bounded + beta*stab``.
       Monotonic in ``raw`` (config ordering from the legacy objective survives),

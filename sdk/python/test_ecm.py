@@ -1,5 +1,5 @@
 """
-Regression tests for inject_ecm()'s Λ initialization (platform#168).
+Regression tests for inject_ecm()'s Λ initialization.
 
 ecm_init="random" and "topk_from_WT" used np.random directly, which is not
 covered by torch.manual_seed() - a caller seeding torch for reproducibility
