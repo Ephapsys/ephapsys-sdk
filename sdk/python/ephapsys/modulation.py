@@ -71,6 +71,16 @@ def bounded_indispensability(raw_ratio: torch.Tensor) -> torch.Tensor:
     return raw_ratio / (1.0 + raw_ratio)
 
 
+def resolve_eval_max_length() -> int:
+    """Resolve the tokenization max_length for streaming language evaluation.
+
+    Reads the ``EVAL_MAX_LENGTH`` env var (default ``512``) so evaluation
+    length is caller-configurable instead of a hardcoded literal baked into
+    the evaluator.
+    """
+    return int(os.environ.get("EVAL_MAX_LENGTH", "512"))
+
+
 # ------------------------------------------------------------
 # Indispensability: Family D loss + ablation probe
 # ------------------------------------------------------------
@@ -1603,6 +1613,8 @@ class ModulatorClient:
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        eval_max_length = resolve_eval_max_length()
+
         # --- Cached metric backends (loaded once per process, reused across trials) ---
         _mcache = getattr(self, "_eval_metric_cache", None)
         if _mcache is None:
@@ -1663,7 +1675,7 @@ class ModulatorClient:
                 text,
                 return_tensors="pt",
                 truncation=True,
-                max_length=128,
+                max_length=eval_max_length,
                 padding=True
             ).to(device)
 
@@ -1710,7 +1722,7 @@ class ModulatorClient:
                     _prompt_str, _gold_str = text, ""
                 gen_inputs = tokenizer(
                     _prompt_str, return_tensors="pt", truncation=True,
-                    max_length=128, padding=True,
+                    max_length=eval_max_length, padding=True,
                 ).to(device)
                 _plen = int(gen_inputs["input_ids"].shape[1])
                 gen = model.generate(
