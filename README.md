@@ -151,6 +151,26 @@ AOC_GGUF_CTX=2048
 AOC_GGUF_MAX_NEW_TOKENS=256
 ```
 
+Optional language (HF transformers) decoding tuning. Values from the agent manifest's
+`config.generation` are used when set; the two decoding-constraint variables override the
+manifest because operators cannot edit it:
+```bash
+AOC_LANGUAGE_TEMPERATURE=0.7             # sampling temperature (manifest wins if set)
+AOC_LANGUAGE_TOP_P=0.9                   # nucleus sampling (manifest wins if set)
+AOC_LANGUAGE_DO_SAMPLE=1                 # 0 = greedy
+AOC_MAX_NEW_TOKENS=512                   # output token cap (else Max Tokens / Request policy)
+AOC_LANGUAGE_USE_CHAT_TEMPLATE=1         # 0 = tokenize the prompt verbatim (caller renders ChatML)
+AOC_LANGUAGE_REPETITION_PENALTY=1.0      # 1.0 = off (default); overrides manifest. Applies to the
+                                         # prompt too, so >1.0 penalizes copying names from the system prompt
+AOC_LANGUAGE_NO_REPEAT_NGRAM_SIZE=0      # 0 = off (default); overrides manifest. Applies to the prompt too
+```
+
+Deployment guidance for the two decoding constraints: set both explicitly in every language
+deployment (`AOC_LANGUAGE_REPETITION_PENALTY=1.0`, `AOC_LANGUAGE_NO_REPEAT_NGRAM_SIZE=0` for
+chat with a system prompt). Defaults are neutral since 0.2.98 (previously 1.1 / 3), but a manifest
+whose `config.generation` sets them still wins over the default, and only the env overrides the
+manifest. The SDK logs the effective values and their source once per loaded runtime.
+
 ## Samples
 
 Samples have moved to a dedicated repo: [ephapsys-samples](https://github.com/Ephapsys/ephapsys-samples).

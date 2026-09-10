@@ -2,6 +2,7 @@
 # agent.py
 from __future__ import annotations
 
+import math
 import os, json, pathlib, hashlib, shutil, base64, time, subprocess, sys, platform, io, warnings, re, shlex, glob
 import concurrent.futures, threading
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
@@ -437,6 +438,62 @@ def _auto_join_clusters(
 
 
 # ---------- TrustedAgent ----------
+def _resolve_decoding_setting(
+    env_name: str, key: str, generation_cfg: Dict[str, Any], model_cfg: Dict[str, Any], default: Any
+) -> Tuple[Any, str]:
+    """Resolve a decoding constraint and report where it came from.
+
+    Precedence: env > manifest config.generation > manifest config > default.
+    Env comes FIRST (unlike temperature/top_p) because the manifest is not
+    operator-editable; the env is the only deployment-level switch.
+    """
+    env_value = os.getenv(env_name)
+    if env_value is not None:
+        return env_value, f"env:{env_name}"
+    if key in generation_cfg:
+        return generation_cfg[key], "manifest:config.generation"
+    if key in model_cfg:
+        return model_cfg[key], "manifest:config"
+    return default, "default"
+
+
+def _parse_repetition_penalty(value: Any) -> float:
+    """Validate a repetition_penalty from env/config: finite and > 0 (1.0 = off)."""
+    if isinstance(value, bool):
+        raise ValueError(f"repetition_penalty must be a number, got {value!r}")
+    try:
+        penalty = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"repetition_penalty must be a number, got {value!r}") from exc
+    if not math.isfinite(penalty) or penalty <= 0:
+        raise ValueError(f"repetition_penalty must be finite and > 0, got {value!r}")
+    return penalty
+
+
+def _parse_no_repeat_ngram_size(value: Any) -> int:
+    """Validate a no_repeat_ngram_size from env/config: non-negative integer (0 = off).
+
+    Fractions are rejected rather than truncated so a typo cannot silently
+    change decoding.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"no_repeat_ngram_size must be an integer, got {value!r}")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"no_repeat_ngram_size must be a whole number, got {value!r}")
+        value = int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text.lstrip("-").isdigit():
+            raise ValueError(f"no_repeat_ngram_size must be a whole number, got {value!r}")
+        value = int(text)
+    if not isinstance(value, int):
+        raise ValueError(f"no_repeat_ngram_size must be an integer, got {value!r}")
+    if value < 0:
+        raise ValueError(f"no_repeat_ngram_size must be >= 0, got {value!r}")
+    return value
+
+
 class TrustedAgent:
     """
     Talks to backend for agent status/certs,
@@ -3544,12 +3601,29 @@ class TrustedAgent:
             generation_cfg.get("temperature", model_cfg.get("temperature", os.getenv("AOC_LANGUAGE_TEMPERATURE", "0.7")))
         )
         top_p = float(generation_cfg.get("top_p", model_cfg.get("top_p", os.getenv("AOC_LANGUAGE_TOP_P", "0.9"))))
-        repetition_penalty = float(
-            generation_cfg.get("repetition_penalty", model_cfg.get("repetition_penalty", 1.1))
+        # Decoding constraints. HF applies RepetitionPenaltyLogitsProcessor and
+        # NoRepeatNGramLogitsProcessor to the PROMPT as well as the output for
+        # decoder-only models, so non-neutral values penalize a chat model for
+        # copying names out of its own system prompt ("Bloxtel" -> "Bloxtell")
+        # and forbid repeating any prompt n-gram ("5G" -> "4/5G"). Defaults are
+        # therefore neutral (1.0 / 0). Precedence is env > generation_cfg >
+        # model_cfg > default -- env FIRST, unlike temperature/top_p, because the
+        # manifest config is not operator-editable and the env is the only
+        # deployment-level switch.
+        _rp_raw, _rp_src = _resolve_decoding_setting(
+            "AOC_LANGUAGE_REPETITION_PENALTY", "repetition_penalty", generation_cfg, model_cfg, 1.0
         )
-        no_repeat_ngram_size = int(
-            generation_cfg.get("no_repeat_ngram_size", model_cfg.get("no_repeat_ngram_size", 3))
+        _ng_raw, _ng_src = _resolve_decoding_setting(
+            "AOC_LANGUAGE_NO_REPEAT_NGRAM_SIZE", "no_repeat_ngram_size", generation_cfg, model_cfg, 0
         )
+        repetition_penalty = _parse_repetition_penalty(_rp_raw)
+        no_repeat_ngram_size = _parse_no_repeat_ngram_size(_ng_raw)
+        if not runtime.get("_decoding_constraints_logged"):
+            logger.info(
+                "[SDK][Language] decoding constraints: repetition_penalty=%s (%s) no_repeat_ngram_size=%s (%s)",
+                repetition_penalty, _rp_src, no_repeat_ngram_size, _ng_src,
+            )
+            runtime["_decoding_constraints_logged"] = True
         do_sample = str(
             generation_cfg.get("do_sample", model_cfg.get("do_sample", os.getenv("AOC_LANGUAGE_DO_SAMPLE", "1")))
         ).strip().lower() not in (
@@ -3563,6 +3637,9 @@ class TrustedAgent:
             "max_new_tokens": max_new_tokens,
             "pad_token_id": tok.pad_token_id,
             "eos_token_id": tok.eos_token_id,
+            # Always passed, even when neutral: generate() merges kwargs over the
+            # checkpoint's own generation_config.json, so omitting them would let
+            # a model ship its own penalties. HF skips the processors at 1.0 / 0.
             "repetition_penalty": repetition_penalty,
             "no_repeat_ngram_size": no_repeat_ngram_size,
         }
