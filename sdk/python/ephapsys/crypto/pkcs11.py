@@ -298,7 +298,8 @@ class Pkcs11Provider:
 
     # ---- operations ------------------------------------------------------
     def sign(self, message: bytes) -> Tuple[str, bytes]:
-        """Sign with an internal-hash mechanism. Returns (sig_alg, signature) with ECDSA as DER."""
+        """Sign SHA-256 over message: CKM_ECDSA_SHA256 / CKM_SHA256_RSA_PKCS, or raw CKM_ECDSA over a host SHA-256
+        digest when the token lacks CKM_ECDSA_SHA256. Returns (sig_alg, signature) with ECDSA as DER."""
         P = self._p
         with self._session() as s:
             priv, pub = self._checked_keys(s, "sign")
