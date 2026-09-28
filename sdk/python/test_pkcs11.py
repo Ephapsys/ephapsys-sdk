@@ -321,3 +321,55 @@ def test_agent_hsm_requires_stable_device_id(token_env, monkeypatch):
     stub = _stub_agent(agent_mod, provider(token_env))
     with pytest.raises(RuntimeError, match="stable device id"):
         agent_mod.TrustedAgent._collect_hsm_evidence(stub, base64.b64encode(b"n").decode())
+
+
+# ---------------- CSR bound to the durable device key (no throwaway key) ----------------
+def _csr(pem):
+    from cryptography import x509
+    return x509.load_pem_x509_csr(pem.encode())
+
+
+def _same_key(pub_a, pub_b):
+    f = lambda k: k.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return f(pub_a) == f(pub_b)
+
+
+@pytest.mark.parametrize("sign_id", ["01", "03"])
+def test_pkcs11_csr_signed_by_token_sign_key(token_env, sign_id):
+    from cryptography.x509.oid import NameOID
+    prov = provider(token_env, PKCS11_SIGN_KEY_ID=sign_id)
+    csr = _csr(prov.build_csr("agent:abc"))
+    assert csr.is_signature_valid
+    assert _same_key(csr.public_key(), load_pub(prov.public_key_pem("sign")))
+    assert not _same_key(csr.public_key(), load_pub(prov.public_key_pem("kem")))
+    assert csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "agent:abc"
+
+
+def _csr_stub(agent_mod, storage_dir, prov=None):
+    import pathlib
+    TA = agent_mod.TrustedAgent
+    stub = types.SimpleNamespace(storage_dir=pathlib.Path(storage_dir))
+    for name in ("_pkcs11_enabled", "_kem_key_paths", "_ensure_auth_pub_pem", "_load_kem_priv", "_generate_csr"):
+        setattr(stub, name, types.MethodType(getattr(TA, name), stub))
+    if prov is not None:
+        stub._pkcs11_provider = lambda: prov
+    return stub
+
+
+def test_agent_csr_uses_token_when_pkcs11(token_env, monkeypatch, tmp_path):
+    import ephapsys.agent as agent_mod
+    for k, v in token_env.items(): monkeypatch.setenv(k, v)
+    prov = provider(token_env)
+    csr = _csr(agent_mod.TrustedAgent._generate_csr(_csr_stub(agent_mod, tmp_path, prov), "abc"))
+    assert csr.is_signature_valid and _same_key(csr.public_key(), load_pub(prov.public_key_pem("sign")))
+    assert not (tmp_path / "kem" / "kem_priv.pem").exists()            # no software key created
+
+
+def test_agent_csr_uses_durable_key_without_pkcs11(monkeypatch, tmp_path):
+    import ephapsys.agent as agent_mod
+    monkeypatch.delenv("PKCS11_MODULE", raising=False)
+    stub = _csr_stub(agent_mod, tmp_path)
+    a = _csr(agent_mod.TrustedAgent._generate_csr(stub, "abc"))
+    b = _csr(agent_mod.TrustedAgent._generate_csr(stub, "abc"))
+    durable = load_pub((tmp_path / "kem" / "kem_pub.pem").read_text())
+    assert a.is_signature_valid and _same_key(a.public_key(), durable) and _same_key(b.public_key(), durable)

@@ -2391,12 +2391,19 @@ class TrustedAgent:
 
     def _generate_csr(self, agent_id: str) -> str:
         """
-        Generate a CSR PEM for this agent (EC P-256 keypair).
-        NOTE: In production, replace with TPM/TEE/SE anchored key generation.
+        Generate a CSR PEM for this agent, signed by the agent's durable device key, so the issued
+        certificate binds the same key the AOC authenticates. Never uses a throwaway key.
+          - PKCS#11 configured: the token SIGN key signs on the token.
+          - Otherwise: the durable device identity key (the key used for device auth).
         """
-        key = ec.generate_private_key(ec.SECP256R1())
-        # Optionally persist the key securely; skipped for now.
-        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"agent:{agent_id}")])
+        cn = f"agent:{agent_id}"
+        if self._pkcs11_enabled():
+            return self._pkcs11_provider().build_csr(cn)
+        self._ensure_auth_pub_pem()                       # creates the durable key if absent
+        key = serialization.load_pem_private_key(self._load_kem_priv().encode(), password=None)
+        if not isinstance(key, ec.EllipticCurvePrivateKey):
+            raise RuntimeError("Durable device key must be EC")
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
         csr = x509.CertificateSigningRequestBuilder().subject_name(subject).sign(key, hashes.SHA256())
         return csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")
 

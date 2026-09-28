@@ -316,6 +316,24 @@ class Pkcs11Provider:
             raise Pkcs11Error(f"unexpected ECDH secret length {len(value)}")
         return value
 
+    def build_csr(self, common_name: str) -> str:
+        """PKCS#10 CSR for the token SIGN key, signed on the token (no software key involved)."""
+        try:
+            from asn1crypto import csr as acsr, keys as akeys, pem as apem, x509 as ax509  # type: ignore
+        except ImportError as exc:  # pragma: no cover - asn1crypto ships with python-pkcs11
+            raise Pkcs11Error("asn1crypto is required to build a PKCS#11 CSR") from exc
+        pub_pem = self.public_key_pem("sign")
+        info = acsr.CertificationRequestInfo({
+            "version": "v1",
+            "subject": ax509.Name.build({"common_name": common_name}),
+            "subject_pk_info": akeys.PublicKeyInfo.load(spki_der(pub_pem)),
+            "attributes": [],
+        })
+        sig_alg, sig = self.sign(info.dump())
+        algo = {"algorithm": "sha256_ecdsa"} if sig_alg == SIG_ALG_EC else {"algorithm": "sha256_rsa", "parameters": None}
+        req = acsr.CertificationRequest({"certification_request_info": info, "signature_algorithm": algo, "signature": sig})
+        return apem.armor("CERTIFICATE REQUEST", req.dump()).decode()
+
     # ---- evidence --------------------------------------------------------
     def personalization_evidence(self, nonce_b64: str) -> Dict[str, Any]:
         """Binding-v1 evidence: the sign key signs domain || nonce || SHA256(SPKI(kem_pub))."""
