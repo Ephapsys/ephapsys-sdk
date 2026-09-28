@@ -332,6 +332,19 @@ def do_model_remove(args):
     print(json.dumps(resp.json(), indent=2))
     return 0
 
+def do_hsm_show_key(args):
+    """Print the PKCS#11 token public keys and SPKI SHA-256 fingerprints for out-of-band enrollment.
+    Reads only public material; never enrolls anything with the AOC."""
+    from .crypto.pkcs11 import Pkcs11Provider, spki_sha256_hex
+    from .auth import resolve_device_id
+    prov = Pkcs11Provider.from_env()
+    out = {"provider": "pkcs11", "token": prov.token_info(), "device_id": resolve_device_id()}
+    for role in ("sign", "kem"):
+        pem = prov.public_key_pem(role)
+        out[role] = {"key_id_hex": prov.key_id_hex(role), "spki_sha256": spki_sha256_hex(pem), "pubkey_pem": pem}
+    print(json.dumps(out, indent=2))
+    return 0
+
 # ---------------- Parser Builder ----------------
 def build_parser():
     p = argparse.ArgumentParser(
@@ -465,6 +478,12 @@ def build_parser():
     mc.add_argument("--artifacts", help="JSON dict (urls/paths)")
     mc.add_argument("--ecm-digest", help="sha256:... digest")
     mc.set_defaults(func=do_mod_complete)
+
+    # ---- HSM / PKCS#11
+    hsm = sub.add_parser("hsm", help="PKCS#11 token utilities")
+    hsub = hsm.add_subparsers(dest="sub", required=True)
+    hshow = hsub.add_parser("show-key", help="Show token public keys + SPKI SHA-256 for operator enrollment (reads PKCS11_* env)")
+    hshow.set_defaults(func=do_hsm_show_key)
 
     # ---- Certificates
     # certs = sub.add_parser("certs", help="Certificate management")

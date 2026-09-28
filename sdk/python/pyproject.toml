@@ -36,6 +36,9 @@ tpm = [
 hsm = [
     "google-cloud-kms>=2.21.0",
 ]
+pkcs11 = [
+    "python-pkcs11>=0.7.0",
+]
 modulation = []
 audio = [
     "librosa>=0.10.2.post1",

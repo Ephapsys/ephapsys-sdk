@@ -69,6 +69,30 @@ def _exchange_provisioning_token(
     return token
 
 
+def resolve_device_id(device_id: Optional[str] = None, *, strict: bool = False) -> str:
+    """Stable device identity used for device auth and anchor enrollment lookup.
+    Order: explicit value, EPHAPSYS_DEVICE_ID, HOSTNAME. strict=True refuses the 'unknown-device' fallback."""
+    resolved = (device_id or os.getenv("EPHAPSYS_DEVICE_ID") or os.getenv("HOSTNAME") or "").strip()
+    if resolved:
+        return resolved
+    if strict:
+        raise RuntimeError("A stable device id is required: set EPHAPSYS_DEVICE_ID")
+    return "unknown-device"
+
+
+def _pkcs11_identity_enabled() -> bool:
+    """Device-auth signs with the token SIGN key whenever a PKCS#11 module is configured (never the KEM key)."""
+    return bool((os.getenv("PKCS11_MODULE") or "").strip())
+
+
+def _sign_identity_message(message: bytes, storage_dir: Optional[str]) -> bytes:
+    if _pkcs11_identity_enabled():
+        from .crypto.pkcs11 import Pkcs11Provider
+        _alg, signature = Pkcs11Provider.from_env().sign(message)
+        return signature
+    return _load_identity_private_key(storage_dir).sign(message, ec.ECDSA(hashes.SHA256()))
+
+
 def _storage_root(storage_dir: Optional[str]) -> Path:
     return Path(storage_dir or os.getenv("EPHAPSYS_STORAGE_DIR", ".ephapsys_state"))
 
@@ -151,8 +175,7 @@ def _exchange_identity_token(
         raise RuntimeError("Device auth challenge succeeded but nonce_b64 missing")
 
     message = f"ephapsys-device-auth-v1|{challenge.get('org_id') or org_id or ''}|{device_id}|{agent_instance_id}|{nonce_b64}".encode("utf-8")
-    private_key = _load_identity_private_key(storage_dir)
-    signature = private_key.sign(message, ec.ECDSA(hashes.SHA256()))
+    signature = _sign_identity_message(message, storage_dir)
 
     url = f"{base_url.rstrip('/')}/auth/device/token"
     body = {
@@ -242,12 +265,7 @@ def get_api_key(
         or os.getenv("AOC_API_URL")
         or "http://localhost:7001"
     )
-    resolved_device = (
-        device_id
-        or os.getenv("EPHAPSYS_DEVICE_ID")
-        or os.getenv("HOSTNAME")
-        or "unknown-device"
-    )
+    resolved_device = resolve_device_id(device_id)
     resolved_instance = (
         agent_instance_id
         or os.getenv("EPHAPSYS_AGENT_ID")
@@ -258,7 +276,7 @@ def get_api_key(
     resolved_org = org_id or os.getenv("AOC_ORG_ID")
 
     identity_error: Optional[RuntimeError] = None
-    identity_key_present = _identity_key_paths(storage_dir)[0].exists()
+    identity_key_present = _pkcs11_identity_enabled() or _identity_key_paths(storage_dir)[0].exists()
     if resolved_instance and identity_key_present:
         try:
             return _exchange_identity_token(

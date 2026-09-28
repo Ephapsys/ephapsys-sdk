@@ -1853,10 +1853,24 @@ class TrustedAgent:
         Collect evidence from an external Hardware Security Module.
 
         Supported workflows:
+          0. Native PKCS#11 when PKCS11_MODULE is set (binding-v1 evidence; see crypto/pkcs11.py).
+             Mutually exclusive with the options below.
           1. Cloud KMS / Cloud HSM (GCP) via google-cloud-kms when HSM_KMS_KEY is set.
-          2. Helper executable via HSM_HELPER (PKCS#11, vendor SDK, etc.).
+          2. Helper executable via HSM_HELPER (vendor SDK, etc.; legacy nonce-only evidence).
           3. Static JSON via HSM_EVIDENCE_PATH (mainly for tests).
         """
+
+        if self._pkcs11_enabled():
+            others = [k for k in ("HSM_HELPER", "HSM_KMS_KEY", "HSM_EVIDENCE_PATH") if (os.getenv(k) or "").strip()]
+            if others:
+                raise RuntimeError(
+                    "Ambiguous HSM configuration: PKCS11_MODULE is set together with " + ", ".join(others)
+                    + ". Configure exactly one HSM provider."
+                )
+            from .auth import resolve_device_id
+            ev = self._pkcs11_provider().personalization_evidence(nonce_b64)
+            ev["device_id"] = resolve_device_id(strict=True)
+            return ev
 
         helper = os.getenv("HSM_HELPER")
         evidence_path = os.getenv("HSM_EVIDENCE_PATH")
@@ -2386,7 +2400,22 @@ class TrustedAgent:
         csr = x509.CertificateSigningRequestBuilder().subject_name(subject).sign(key, hashes.SHA256())
         return csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")
 
+    def _pkcs11_enabled(self) -> bool:
+        return bool((os.getenv("PKCS11_MODULE") or "").strip())
+
+    def _pkcs11_provider(self):
+        """Lazily construct the (fail-closed) PKCS#11 token provider from env; cached per agent."""
+        prov = getattr(self, "_pkcs11_provider_cache", None)
+        if prov is None:
+            from .crypto.pkcs11 import Pkcs11Provider
+            prov = Pkcs11Provider.from_env()
+            self._pkcs11_provider_cache = prov
+        return prov
+
     def _ensure_auth_pub_pem(self) -> str:
+        if self._pkcs11_enabled():
+            # KEM (SIE recipient) key lives on the token; never generate a software key in this mode.
+            return self._pkcs11_provider().public_key_pem("kem")
         priv_p, pub_p = self._kem_key_paths()
         if pub_p.exists():
             return pub_p.read_text()
@@ -2599,7 +2628,8 @@ class TrustedAgent:
                     state_dir=str(model_dir),
                     api_key=self.api_key,
                     verify_ssl=self.verify_ssl,
-                    privkey_loader=lambda: self._load_kem_priv(),
+                    **({"tpm_ecdh": self._pkcs11_provider().ecdh} if self._pkcs11_enabled()
+                       else {"privkey_loader": lambda: self._load_kem_priv()}),
                 )
                 try:
                     ecm_bytes = sie.ensure_ecm_cached_and_get_bytes(entry)

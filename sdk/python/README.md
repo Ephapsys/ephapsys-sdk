@@ -68,7 +68,29 @@ print(agent.run("Hello world", model_kind="language"))
 | `AOC_PROVISIONING_TOKEN` | Provisioning credential exchanged for short-lived device token |
 | `EPHAPSYS_STORAGE_DIR`| Optional, defaults to `.ephapsys_state`             |
 
-For edge production, use hardware anchors (`tpm`, `tee`, `dsim`, `hsm`) and avoid `PERSONALIZE_ANCHOR=none`.
+For edge production, use a hardware anchor (`tpm` or `hsm`) and avoid `PERSONALIZE_ANCHOR=none`.
+(`tee` and `dsim` are not yet enabled.)
+
+### PKCS#11 tokens (`hsm` anchor)
+
+Any PKCS#11 token (TEE-backed tokens, HSMs, USB tokens) can back the `hsm` anchor. Install the extra and configure the token; only configuration is device-specific:
+
+```bash
+pip install "ephapsys[pkcs11]"
+
+PERSONALIZE_ANCHOR=hsm
+PKCS11_MODULE=/path/to/pkcs11-module.so    # the token vendor's PKCS#11 library
+PKCS11_TOKEN_LABEL=my-token                 # or PKCS11_TOKEN_SERIAL (slot index is not accepted)
+PKCS11_PIN_FILE=/secure/path/pin            # or PKCS11_PIN
+PKCS11_SIGN_KEY_ID=01                       # or PKCS11_SIGN_KEY_LABEL: EC P-256 or RSA-2048+
+PKCS11_KEM_KEY_ID=02                        # or PKCS11_KEM_KEY_LABEL: EC P-256 with derive permission
+EPHAPSYS_DEVICE_ID=device-0001              # stable device identity
+```
+
+- Two separate, sensitive, non-extractable token keys: a **sign** key for personalization evidence and device authentication, and a **KEM** key (ECDH) that receives the model key and protects the encrypted-at-rest cache.
+- Keys must be enrolled with the AOC by an operator before personalization; the SDK never enrolls keys itself. `ephapsys hsm show-key` prints the public keys and SPKI SHA-256 fingerprints to register.
+- Selection is fail-closed: ambiguous provider configuration (`PKCS11_MODULE` together with `HSM_HELPER`/`HSM_KMS_KEY`/`HSM_EVIDENCE_PATH`), missing or duplicate keys, extractable keys and unsupported mechanisms are all rejected.
+- Scope: token-backed key custody. Whether a token is hardware-backed depends on the deployed provider; SoftHSM is for testing only. PKCS#11 provides no measured-boot attestation, and decrypted model material is held in process memory while in use.
 
 Runtime download tuning (optional):
 ```bash
