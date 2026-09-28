@@ -52,16 +52,20 @@ def token_env(tmp_path_factory):
             tmpl = {Attribute.SENSITIVE: True, Attribute.EXTRACTABLE: False}
             tmpl.update(priv)
             return params.generate_keypair(store=True, id=kid, label=label, private_template=tmpl)
-        ec_pair("secp256r1", b"\x01", "sign", {Attribute.SIGN: True})
-        ec_pair("secp256r1", b"\x02", "kem", {Attribute.DERIVE: True})
+        SIGN_ONLY = {Attribute.SIGN: True, Attribute.DERIVE: False}
+        KEM_ONLY = {Attribute.DERIVE: True, Attribute.SIGN: False}
+        ec_pair("secp256r1", b"\x01", "sign", SIGN_ONLY)
+        ec_pair("secp256r1", b"\x02", "kem", KEM_ONLY)
         s.generate_keypair(KeyType.RSA, 2048, store=True, id=b"\x03", label="rsa-sign",
-                           private_template={Attribute.SENSITIVE: True, Attribute.EXTRACTABLE: False, Attribute.SIGN: True})
-        ec_pair("secp256r1", b"\x04", "kem-other", {Attribute.DERIVE: True})
-        ec_pair("secp256r1", b"\x05", "extractable", {Attribute.SIGN: True, Attribute.SENSITIVE: False, Attribute.EXTRACTABLE: True})
-        ec_pair("secp256r1", b"\x06", "dup", {Attribute.SIGN: True})
-        ec_pair("secp256r1", b"\x07", "dup", {Attribute.SIGN: True})
-        ec_pair("secp384r1", b"\x08", "kem-p384", {Attribute.DERIVE: True})
-        ec_pair("secp256r1", b"\x09", "no-sign-perm", {Attribute.SIGN: False})
+                           private_template={Attribute.SENSITIVE: True, Attribute.EXTRACTABLE: False, Attribute.SIGN: True, Attribute.DERIVE: False})
+        ec_pair("secp256r1", b"\x04", "kem-other", KEM_ONLY)
+        ec_pair("secp256r1", b"\x05", "extractable", {**SIGN_ONLY, Attribute.SENSITIVE: False, Attribute.EXTRACTABLE: True})
+        ec_pair("secp256r1", b"\x06", "dup", SIGN_ONLY)
+        ec_pair("secp256r1", b"\x07", "dup", SIGN_ONLY)
+        ec_pair("secp384r1", b"\x08", "kem-p384", KEM_ONLY)
+        ec_pair("secp256r1", b"\x09", "no-sign-perm", {Attribute.SIGN: False, Attribute.DERIVE: False})
+        ec_pair("secp256r1", b"\x0a", "kem-can-sign", {Attribute.DERIVE: True, Attribute.SIGN: True})
+        ec_pair("secp256r1", b"\x0b", "sign-can-derive", {Attribute.SIGN: True, Attribute.DERIVE: True})
     return dict(PKCS11_MODULE=SOFTHSM_LIB, PKCS11_TOKEN_LABEL=TOKEN, PKCS11_PIN=PIN,
                 PKCS11_SIGN_KEY_ID="01", PKCS11_KEM_KEY_ID="02")
 
@@ -147,6 +151,21 @@ def test_ecdh_rejects_non_p256_peer(token_env):
 def test_sign_key_rejections(token_env, over, needle):
     with pytest.raises(p11.Pkcs11Error, match=needle):
         provider(token_env, **over).sign(b"x")
+
+
+def test_role_separation_enforced(token_env):
+    with pytest.raises(p11.Pkcs11Error, match="must not have CKA_SIGN"):
+        provider(token_env, PKCS11_KEM_KEY_ID="0a").public_key_pem("kem")
+    with pytest.raises(p11.Pkcs11Error, match="must not have CKA_DERIVE"):
+        provider(token_env, PKCS11_SIGN_KEY_ID="0b").sign(b"x")
+    with pytest.raises(p11.Pkcs11Error, match="distinct"):
+        provider(token_env, PKCS11_KEM_KEY_ID="01")          # identical selectors rejected at validation
+
+
+def test_constructor_validates_config(token_env):
+    bad = p11.Pkcs11Config(module=SOFTHSM_LIB, token_label=TOKEN, pin=PIN, sign_key_id=b"\x01")   # no kem selector
+    with pytest.raises(p11.Pkcs11Error, match="kem key"):
+        p11.Pkcs11Provider(bad)
 
 
 def test_kem_must_be_p256(token_env):
@@ -373,3 +392,107 @@ def test_agent_csr_uses_durable_key_without_pkcs11(monkeypatch, tmp_path):
     b = _csr(agent_mod.TrustedAgent._generate_csr(stub, "abc"))
     durable = load_pub((tmp_path / "kem" / "kem_pub.pem").read_text())
     assert a.is_signature_valid and _same_key(a.public_key(), durable) and _same_key(b.public_key(), durable)
+
+
+# ---------------- strict SIE (native PKCS#11 path) ----------------
+class _Resp:
+    def __init__(self, code, content=b""):
+        self.status_code, self.content = code, content
+
+
+def _sie(agent_mod, state_dir, prov, base="https://aoc.example.com", strict=True):
+    sie = object.__new__(agent_mod.SIEManager)          # bypass network credential resolution
+    sie.strict, sie.base_url, sie.agent_id, sie.state_dir = strict, base, "inst-1", str(state_dir)
+    sie.verify_ssl, sie.api_key = True, "device-token"
+    sie.privkey_pem = sie.privkey_loader = None
+    sie.tpm_ecdh = prov.ecdh if prov else None
+    sie._status = lambda: {"ok": True, "enabled": True, "revoked": False}
+    return sie
+
+
+def _cipher_entry(prov, ecm=b"lambda-bytes"):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    cek, nonce = os.urandom(32), os.urandom(12)
+    ct = nonce + AESGCM(cek).encrypt(nonce, ecm, None)
+    entry = {"id": "m1", "cipher_ecm_uri": "/agents/inst-1/sie/m1", "cipher_ecm_digest": "sha256:" + hashlib.sha256(ct).hexdigest(),
+             "sie_wrapped_cek_b64": hpke.wrap(prov.public_key_pem("kem"), cek)}
+    return entry, ct
+
+
+def test_strict_sie_roundtrip_same_origin_auth(pkcs11_storage, token_env, tmp_path, monkeypatch):
+    import ephapsys.agent as agent_mod, requests
+    prov = provider(token_env); entry, ct = _cipher_entry(prov)
+    calls = []
+    def fake_get(url, headers=None, timeout=None, verify=None, allow_redirects=None):
+        calls.append((url, dict(headers or {}), verify, allow_redirects)); return _Resp(200, ct)
+    monkeypatch.setattr(requests, "get", fake_get)
+    sie = _sie(agent_mod, tmp_path, prov)
+    assert sie.ensure_ecm_cached_and_get_bytes(entry) == b"lambda-bytes"
+    url, headers, verify, redirects = calls[0]
+    assert url == "https://aoc.example.com/agents/inst-1/sie/m1" and headers["Authorization"] == "Bearer device-token"
+    assert verify is True and redirects is False
+    assert sie.ensure_ecm_cached_and_get_bytes(entry) == b"lambda-bytes" and len(calls) == 1      # served from the encrypted cache
+    cached = [f for f in os.listdir(os.path.join(tmp_path, "cache")) if f.endswith(".enc")]
+    assert cached and all(entry["cipher_ecm_digest"][7:23] in f for f in cached)                  # digest-bound cache name
+
+
+def test_strict_sie_url_rules(token_env, tmp_path, monkeypatch):
+    import ephapsys.agent as agent_mod, requests
+    seen = []
+    monkeypatch.setattr(requests, "get", lambda url, headers=None, **k: seen.append(dict(headers or {})) or _Resp(200, b"x"))
+    sie = _sie(agent_mod, tmp_path, provider(token_env))
+    sie._fetch_cipher("https://storage.example.net/obj?sig=1")                                   # foreign origin: no token
+    assert "Authorization" not in seen[-1]
+    for bad in ("http://aoc.example.com/x", "file:///etc/passwd", "ftp://aoc.example.com/x"):
+        with pytest.raises(agent_mod.SecureInferenceError):
+            sie._fetch_cipher(bad)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(302))
+    with pytest.raises(agent_mod.SecureInferenceError, match="302"):
+        sie._fetch_cipher("/agents/inst-1/sie/m1")
+    dev = _sie(agent_mod, tmp_path, provider(token_env), base="http://localhost:7001")            # dev AOC over http, same origin
+    monkeypatch.setattr(requests, "get", lambda url, headers=None, **k: seen.append(dict(headers or {})) or _Resp(200, b"x"))
+    dev._fetch_cipher("/agents/inst-1/sie/m1"); assert seen[-1]["Authorization"] == "Bearer device-token"
+
+
+def test_strict_sie_requires_digest_ecdh_and_matching_ciphertext(pkcs11_storage, token_env, tmp_path, monkeypatch):
+    import ephapsys.agent as agent_mod, requests
+    prov = provider(token_env); entry, ct = _cipher_entry(prov)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, ct[:-1] + bytes([ct[-1] ^ 1])))
+    with pytest.raises(agent_mod.SecureInferenceError, match="digest mismatch"):
+        _sie(agent_mod, tmp_path, prov).ensure_ecm_cached_and_get_bytes(entry)
+    with pytest.raises(agent_mod.SecureInferenceError, match="cipher_ecm_digest is required"):
+        _sie(agent_mod, tmp_path, prov).ensure_ecm_cached_and_get_bytes({**entry, "cipher_ecm_digest": ""})
+    with pytest.raises(agent_mod.SecureInferenceError, match="token ECDH"):
+        _sie(agent_mod, tmp_path, None).ensure_ecm_cached_and_get_bytes(entry)
+    other = hpke.wrap(provider(token_env, PKCS11_KEM_KEY_ID="04").public_key_pem("kem"), os.urandom(32))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, ct))
+    with pytest.raises(agent_mod.SecureInferenceError, match="unwrap failed"):                   # CEK wrapped to another key
+        _sie(agent_mod, tmp_path, prov).ensure_ecm_cached_and_get_bytes({**entry, "sie_wrapped_cek_b64": other})
+
+
+@pytest.mark.parametrize("mutate,needle", [
+    (lambda e: e.pop("cipher_ecm_uri"), "lacks SIE"),
+    (lambda e: e.update(sie_wrapped_cek_b64=None), "lacks SIE"),
+    (lambda e: e.update(cipher_ecm_digest=""), "cipher_ecm_digest"),
+    (lambda e: e.update(ecm_uri="https://x/ecm.pt"), "plaintext ecm_uri"),
+    (lambda e: e.update(artifact_urls={"ecm.pt": {"url": "https://x/ecm.pt"}}), "plaintext ECM artifacts"),
+    (lambda e: e.update(artifact_urls={"weights": {"url": "https://x/files/lambda_ecm.pt?sig=1"}}), "plaintext ECM artifacts"),
+])
+def test_native_manifest_rejections(mutate, needle):
+    import ephapsys.agent as agent_mod
+    entry = {"cipher_ecm_uri": "/agents/i/sie/m", "sie_wrapped_cek_b64": "w", "cipher_ecm_digest": "sha256:ab",
+             "artifact_urls": {"model.safetensors": {"url": "https://x/model.safetensors"}}}
+    stub = types.SimpleNamespace(_is_ecm_artifact=agent_mod.TrustedAgent._is_ecm_artifact)
+    agent_mod.TrustedAgent._check_native_sie_entry(stub, "m", entry)                              # valid entry passes
+    mutate(entry)
+    with pytest.raises(agent_mod.SecureInferenceError, match=needle):
+        agent_mod.TrustedAgent._check_native_sie_entry(stub, "m", entry)
+
+
+def test_ecm_apply_fails_closed_when_required():
+    import ephapsys.agent as agent_mod
+    stub = types.SimpleNamespace(_resolve_ecm_target=lambda model, t: None)
+    runtime = {"kind": "language", "_ecm_required": True}
+    with pytest.raises(agent_mod.SecureInferenceError, match="ECM target"):
+        agent_mod.TrustedAgent._apply_ecm_if_available(stub, object(), runtime)
+    agent_mod.TrustedAgent._apply_ecm_if_available(stub, object(), {"kind": "language"})          # legacy path: warn only

@@ -123,6 +123,10 @@ class Pkcs11Config:
             raise Pkcs11Error("set only one of PKCS11_PIN and PKCS11_PIN_FILE")
         if not (self.pin or self.pin_file):
             raise Pkcs11Error("set PKCS11_PIN_FILE (preferred) or PKCS11_PIN")
+        for role in ("sign", "kem"):
+            self.key_selector(role)                      # both roles are always required
+        if self.key_selector("sign") == self.key_selector("kem"):
+            raise Pkcs11Error("sign and kem keys must be distinct token objects (identical selectors configured)")
 
     def resolve_pin(self) -> str:
         if self.pin_file:
@@ -170,6 +174,7 @@ class Pkcs11Provider:
     """Thin, fail-closed wrapper over one PKCS#11 token. Each operation opens its own session."""
 
     def __init__(self, config: Pkcs11Config, *, lib_factory: Optional[Callable[[str], Any]] = None):
+        config.validate()                                # the constructor never bypasses validation
         self.config = config
         self._p = _import_pkcs11()
         factory = lib_factory or self._p.lib
@@ -236,13 +241,18 @@ class Pkcs11Provider:
             raise Pkcs11Error(f"cannot read SENSITIVE/EXTRACTABLE on the {role} key: {exc}") from exc
         if not sensitive or extractable:
             raise Pkcs11Error(f"{role} private key must be sensitive and non-extractable (sensitive={sensitive}, extractable={extractable})")
-        usage = A.SIGN if role == "sign" else A.DERIVE
-        try:
-            allowed = priv[usage]
-        except Exception:
-            allowed = False
-        if not allowed:
-            raise Pkcs11Error(f"{role} private key lacks the {'CKA_SIGN' if role == 'sign' else 'CKA_DERIVE'} permission")
+        def flag(attr) -> bool:
+            try:
+                return bool(priv[attr])
+            except Exception:
+                return False
+        # Role separation: sign keys sign only, KEM keys derive only.
+        need, forbid = (A.SIGN, A.DERIVE) if role == "sign" else (A.DERIVE, A.SIGN)
+        need_name, forbid_name = ("CKA_SIGN", "CKA_DERIVE") if role == "sign" else ("CKA_DERIVE", "CKA_SIGN")
+        if not flag(need):
+            raise Pkcs11Error(f"{role} private key lacks the {need_name} permission")
+        if flag(forbid):
+            raise Pkcs11Error(f"{role} private key must not have {forbid_name} (role separation)")
 
     def _public_key(self, session, role: str):
         """Return a `cryptography` public key for the role's public object."""
@@ -264,6 +274,10 @@ class Pkcs11Provider:
         priv = self._find_one(session, P.ObjectClass.PRIVATE_KEY, role)
         self._check_private_policy(priv, role)
         pub = self._public_key(session, role)
+        other = self._public_key(session, "kem" if role == "sign" else "sign")
+        der = lambda k: k.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        if der(pub) == der(other):
+            raise Pkcs11Error("sign and kem roles resolve to the same public key; distinct keys are required")
         if role == "kem" and not (isinstance(pub, ec.EllipticCurvePublicKey) and isinstance(pub.curve, ec.SECP256R1)):
             raise Pkcs11Error("kem key must be EC P-256 (hpke v1)")
         if role == "sign":

@@ -2168,6 +2168,30 @@ class TrustedAgent:
                 logger.debug("[SDK] Signed URL fetch failed for %s: %s", mid, e)
         return {}
 
+    def _check_native_sie_entry(self, mid: str, entry: Dict[str, Any]) -> None:
+        """Native pinned (PKCS#11) path: every model's ECM arrives only as SIE ciphertext; no plaintext source."""
+        if not entry.get("cipher_ecm_uri") or entry.get("sie_wrapped_cek_b64") is None:
+            raise SecureInferenceError(f"Native PKCS#11 manifest for model {mid} lacks SIE ciphertext/wrapped CEK")
+        if not (entry.get("cipher_ecm_digest") or "").removeprefix("sha256:"):
+            raise SecureInferenceError(f"Native PKCS#11 manifest for model {mid} lacks cipher_ecm_digest")
+        if entry.get("ecm_uri"):
+            raise SecureInferenceError(f"Native PKCS#11 manifest for model {mid} must not carry a plaintext ecm_uri")
+        ecm_like = [n for n, m in (entry.get("artifact_urls") or {}).items() if self._is_ecm_artifact(n, m)]
+        if ecm_like:
+            raise SecureInferenceError(f"Native PKCS#11 manifest for model {mid} lists plaintext ECM artifacts: {ecm_like}")
+
+    @staticmethod
+    def _is_ecm_artifact(name: str, meta: Optional[Dict[str, Any]] = None) -> bool:
+        """True for artifacts that look like a plaintext ECM / Λ (never allowed on the native PKCS#11 path)."""
+        meta = meta or {}
+        cands = [str(name or "")] + [str(meta.get(k) or "") for k in ("url", "storage_path", "name", "kind")]
+        for c in cands:
+            base = c.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+            if base in ("ecm", "ecm.pt", "ecm.bin", "lambda_ecm", "lambda_ecm.pt") or base.endswith(".ecm") \
+                    or base.startswith("ecm.") or str(meta.get("kind") or "").lower() == "ecm":
+                return True
+        return False
+
     def _prepare_artifacts_parallel(self, model_id: str, artifacts: Dict[str, Dict[str, Any]], model_dir: pathlib.Path) -> Dict[str, str]:
         """
         Download/validate artifacts for a model with bounded parallelism.
@@ -2622,6 +2646,10 @@ class TrustedAgent:
             model_dir = self._cache_dir() / mid
             os.makedirs(model_dir, exist_ok=True)
 
+            strict_sie = self._pkcs11_enabled()
+            if strict_sie:
+                self._check_native_sie_entry(mid, entry)
+
             # Pre-fetch GCS signed URLs for this model
             self._signed_urls_cache = self._fetch_signed_artifact_urls(mid, entry)
 
@@ -2635,8 +2663,9 @@ class TrustedAgent:
                     state_dir=str(model_dir),
                     api_key=self.api_key,
                     verify_ssl=self.verify_ssl,
-                    **({"tpm_ecdh": self._pkcs11_provider().ecdh} if self._pkcs11_enabled()
+                    **({"tpm_ecdh": self._pkcs11_provider().ecdh} if strict_sie
                        else {"privkey_loader": lambda: self._load_kem_priv()}),
+                    strict=strict_sie,
                 )
                 try:
                     ecm_bytes = sie.ensure_ecm_cached_and_get_bytes(entry)
@@ -2644,6 +2673,8 @@ class TrustedAgent:
                     logger.debug("[SDK][ECM] Secure ECM loaded for %s (%s)", kind, mid)
 
                 except Exception as e:
+                    if strict_sie:
+                        raise                                    # fail closed: never run without the governed ECM
                     print(f"[SDK][ECM] ⚠️ Secure ECM load failed for {kind}: {e}")
                     logger.warning("[SDK][ECM] ⚠️ Secure ECM load failed for %s: %s", kind, e)
             elif entry.get("ecm_uri"):
@@ -2684,6 +2715,7 @@ class TrustedAgent:
                 local_paths["ephaptic"] = entry["ephaptic"]
             local_paths["model_id"] = entry.get("id") or mid
             local_paths["_ecm_cache_name"] = f"{mid}.ecm"
+            local_paths["_ecm_required"] = strict_sie
             local_paths["_adapt_state"] = self._load_adapt_state(kind)
             gguf_path = self._find_gguf_path(local_paths)
             if gguf_path:
@@ -3259,6 +3291,12 @@ class TrustedAgent:
 
     def _apply_ecm_if_available(self, model: Any, runtime: Dict[str, Any], install_only: bool = False) -> None:
         kind = runtime.get("kind") or "unknown"
+
+        def _soft_fail(msg: str, *args) -> None:
+            # Native pinned (PKCS#11) runtimes require the governed ECM: never run without it.
+            if runtime.get("_ecm_required"):
+                raise SecureInferenceError(msg % args if args else msg)
+            logger.warning(msg, *args)
         eph_cfg = runtime.get("ephaptic") or {}
         cfg = runtime.get("config") or {}
         if not eph_cfg and isinstance(cfg, dict):
@@ -3269,7 +3307,7 @@ class TrustedAgent:
         try:
             import torch
         except ImportError:
-            logger.warning("[SDK][ECM] Torch not available; skipping ECM injection")
+            _soft_fail("[SDK][ECM] Torch not available; skipping ECM injection")
             return
 
         adapt_state = runtime.get("_adapt_state")
@@ -3292,7 +3330,7 @@ class TrustedAgent:
 
         target = self._resolve_ecm_target(model, eph_cfg.get("target") or eph_cfg.get("module"))
         if target is None:
-            logger.warning("[SDK][ECM] Unable to resolve ECM target; skipping injection")
+            _soft_fail("[SDK][ECM] Unable to resolve ECM target; skipping injection")
             return
 
         if not getattr(target, "_ephaptic_hook_installed", False):
@@ -3310,7 +3348,7 @@ class TrustedAgent:
                 )
                 target._ephaptic_hook_installed = True
             except Exception as e:
-                logger.warning("[SDK][ECM] ECM hook injection failed: %s", e)
+                _soft_fail("[SDK][ECM] ECM hook injection failed: %s", e)
                 return
 
         if install_only:
@@ -3327,16 +3365,18 @@ class TrustedAgent:
             elif runtime.get("ecm_path") and os.path.exists(runtime["ecm_path"]):
                 ecm_tensor = torch.load(runtime["ecm_path"], map_location=self._device())
         except Exception as e:
-            logger.warning("[SDK][ECM] Failed to load ECM tensor: %s", e)
+            _soft_fail("[SDK][ECM] Failed to load ECM tensor: %s", e)
             return
 
         if ecm_tensor is None:
+            if runtime.get("_ecm_required"):
+                raise SecureInferenceError("[SDK][ECM] Governed ECM required but no ECM tensor is available")
             logger.debug("[SDK][ECM] No ECM tensor available; skipping parameter load")
             return
 
         Lambda_param = getattr(target, "lambda_ecm", None)
         if Lambda_param is None:
-            logger.warning("[SDK][ECM] lambda_ecm parameter missing after injection")
+            _soft_fail("[SDK][ECM] lambda_ecm parameter missing after injection")
             return
 
         try:
@@ -3350,7 +3390,7 @@ class TrustedAgent:
                 Lambda_param.copy_(shaped)
             logger.debug("[SDK][ECM] Applied ECM tensor shape=%s variant=%s epsilon=%.4f", tuple(shaped.shape), variant, epsilon)
         except Exception as e:
-            logger.warning("[SDK][ECM] Failed to apply ECM tensor: %s", e)
+            _soft_fail("[SDK][ECM] Failed to apply ECM tensor: %s", e)
             return
 
         try:
@@ -4750,7 +4790,9 @@ class SIEManager:
         privkey_pem: Optional[str] = None,                   # dev
         privkey_loader: Optional[Callable[[], str]] = None,  # dev
         tpm_ecdh: Optional[Callable[[bytes], bytes]] = None, # prod
+        strict: bool = False,                                # native pinned PKCS#11 path
     ):
+        self.strict     = bool(strict)
         self.base_url   = base_url.rstrip("/")
         self.agent_id   = agent_id_or_did
         self.state_dir  = state_dir
@@ -4768,6 +4810,30 @@ class SIEManager:
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
+
+    def _fetch_cipher(self, c_uri: str) -> bytes:
+        """Strict ciphertext fetch: resolve relative AOC paths against base_url; send the device token only
+        to the same origin as the AOC; require https unless the AOC itself is http (dev); respect verify_ssl."""
+        from urllib.parse import urljoin, urlsplit
+        import requests
+        url = urljoin(self.base_url + "/", c_uri) if c_uri.startswith("/") else c_uri
+        tgt, base = urlsplit(url), urlsplit(self.base_url)
+        origin = lambda u: (u.scheme.lower(), (u.hostname or "").lower(), u.port or {"https": 443, "http": 80}.get(u.scheme.lower()))
+        same_origin = origin(tgt) == origin(base)
+        if tgt.scheme.lower() not in ("https", "http"):
+            raise SecureInferenceError(f"unsupported ciphertext URL scheme {tgt.scheme!r}")
+        if tgt.scheme.lower() == "http" and not (same_origin and base.scheme.lower() == "http"):
+            raise SecureInferenceError("ciphertext URL must use https")
+        headers = {"Accept": "application/octet-stream"}
+        if same_origin:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            resp = requests.get(url, headers=headers, timeout=60, verify=self.verify_ssl, allow_redirects=False)
+        except requests.RequestException as e:
+            raise SecureInferenceError(f"ciphertext fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise SecureInferenceError(f"ciphertext fetch failed ({resp.status_code})")
+        return resp.content
 
     def _status(self) -> dict:
         # Authenticated call; backend route already exists in agents.py
@@ -4793,13 +4859,18 @@ class SIEManager:
             raise SecureInferenceError(f"Agent not enabled (status={st.get('status')})")
 
         # 1) validate manifest fields
-        cache_name = f"{entry.get('id','ecm')}.ecm"
         c_uri  = entry.get("cipher_ecm_uri")
         c_dgst = (entry.get("cipher_ecm_digest") or "").removeprefix("sha256:")
+        # strict: the cache entry is bound to the ciphertext digest, so a rotated ciphertext never hits a stale cache
+        cache_name = f"{entry.get('id','ecm')}.{c_dgst[:16]}.ecm" if (self.strict and c_dgst) else f"{entry.get('id','ecm')}.ecm"
         wrapped = entry.get("sie_wrapped_cek_b64")
 
         if not c_uri:
             raise SecureInferenceError("Secure ECM not available (cipher_ecm_uri missing)")
+        if self.strict and not c_dgst:
+            raise SecureInferenceError("cipher_ecm_digest is required on the native PKCS#11 path")
+        if self.strict and self.tpm_ecdh is None:
+            raise SecureInferenceError("native PKCS#11 SIE requires token ECDH (no software KEM key)")
         if wrapped is None:
             # With SIE: we require a wrapped CEK (HPKE/ECIES). If you want TPM-sealed DEK-only mode, add a separate branch.
             raise SecureInferenceError("Missing wrapped CEK (sie_wrapped_cek_b64)")
@@ -4810,7 +4881,7 @@ class SIEManager:
             return storage.read_encrypted(self.state_dir, cache_name)
 
         # 3) fetch ciphertext + verify digest
-        ct = _http_get_bytes(c_uri)
+        ct = self._fetch_cipher(c_uri) if self.strict else _http_get_bytes(c_uri)
         if c_dgst:
             got = _sha256_hex(ct)
             if got != c_dgst:
