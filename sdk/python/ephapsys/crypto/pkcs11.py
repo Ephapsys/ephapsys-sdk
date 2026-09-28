@@ -6,8 +6,8 @@ One code path for any PKCS#11 token (TEE-backed tokens, HSMs, USB tokens, SoftHS
 Only configuration is device-specific: the module path, token and key identifiers, and the PIN.
 
 Two key roles, separate token objects, both required to be sensitive and non-extractable:
-  - sign: EC P-256 or RSA; signs personalization evidence with an internal-hash mechanism
-          (CKM_ECDSA_SHA256 / CKM_SHA256_RSA_PKCS).
+  - sign: EC P-256 or RSA; signs personalization evidence with CKM_ECDSA_SHA256 / CKM_SHA256_RSA_PKCS,
+          or raw CKM_ECDSA over a host-computed SHA-256 digest when the token lacks CKM_ECDSA_SHA256.
   - kem:  EC P-256; CKM_ECDH1_DERIVE for SIE CEK unwrap and for the at-rest cache DEK
           (ECIES in the existing hpke v1 format). Long-term private keys never leave the token;
           only the per-message derived secret reaches host memory.
@@ -303,9 +303,16 @@ class Pkcs11Provider:
         with self._session() as s:
             priv, pub = self._checked_keys(s, "sign")
             if isinstance(pub, ec.EllipticCurvePublicKey):
-                self._require_mechanism(P.Mechanism.ECDSA_SHA256)
                 from pkcs11.util.ec import encode_ecdsa_signature  # type: ignore
-                raw = priv.sign(message, mechanism=P.Mechanism.ECDSA_SHA256)
+                mechs = self.mechanisms()
+                if P.Mechanism.ECDSA_SHA256 in mechs:
+                    raw = priv.sign(message, mechanism=P.Mechanism.ECDSA_SHA256)
+                elif P.Mechanism.ECDSA in mechs:
+                    # Tokens without the combined mechanism (e.g. SoftHSM 2.6): raw ECDSA over SHA-256(message),
+                    # computed on the host. The resulting signature is identical in form to ECDSA_SHA256.
+                    raw = priv.sign(hashlib.sha256(message).digest(), mechanism=P.Mechanism.ECDSA)
+                else:
+                    raise Pkcs11Error("token does not support a required signing mechanism (CKM_ECDSA_SHA256 or CKM_ECDSA)")
                 return SIG_ALG_EC, encode_ecdsa_signature(raw)
             self._require_mechanism(P.Mechanism.SHA256_RSA_PKCS)
             return SIG_ALG_RSA, priv.sign(message, mechanism=P.Mechanism.SHA256_RSA_PKCS)

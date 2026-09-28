@@ -173,6 +173,18 @@ def test_kem_must_be_p256(token_env):
         provider(token_env, PKCS11_KEM_KEY_ID="08").public_key_pem("kem")
 
 
+def test_ecdsa_raw_fallback_when_combined_mechanism_missing(token_env, monkeypatch):
+    """Tokens such as SoftHSM 2.6 lack CKM_ECDSA_SHA256: sign SHA-256(msg) with raw CKM_ECDSA instead."""
+    prov = provider(token_env)
+    real = prov.mechanisms()
+    monkeypatch.setattr(prov, "mechanisms", lambda: {m for m in real if m != Mechanism.ECDSA_SHA256})
+    nonce = os.urandom(32)
+    ev = prov.personalization_evidence(base64.b64encode(nonce).decode())
+    assert ev["sig_alg"] == p11.SIG_ALG_EC
+    load_pub(ev["pubkey_pem"]).verify(base64.b64decode(ev["sig_b64"]), p11.binding_message(nonce, ev["kem_pub_pem"]),
+                                      ec.ECDSA(hashes.SHA256()))       # verifies exactly like ECDSA_SHA256 output
+
+
 def test_missing_mechanism_fails_closed(token_env, monkeypatch):
     prov = provider(token_env)
     monkeypatch.setattr(prov, "mechanisms", lambda: {Mechanism.SHA256_RSA_PKCS})
