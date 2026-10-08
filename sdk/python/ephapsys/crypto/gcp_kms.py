@@ -282,6 +282,14 @@ class GcpKmsProvider:
         if state != "ENABLED":
             raise GcpKmsKeyUnavailable(f"{name} is {state}")
 
+    def public_key_pem_of_version(self, name: str) -> str:
+        """Public key of a specific (older) signing version; unavailability is GcpKmsKeyUnavailable."""
+        self.require_usable(name)
+        try:
+            return self.public_key_pem("sign", name)
+        except _unavailable_errors() as exc:
+            raise GcpKmsKeyUnavailable(f"{name}: {exc.__class__.__name__}") from exc
+
     def sign_with_version(self, message: bytes, name: str) -> bytes:
         """Sign with a specific (older) version; its unavailability is reported as GcpKmsKeyUnavailable."""
         self.require_usable(name)

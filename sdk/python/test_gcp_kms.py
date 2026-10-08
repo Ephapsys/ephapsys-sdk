@@ -274,3 +274,22 @@ def test_auth_detects_kms_without_importing_it(monkeypatch):
     monkeypatch.setenv("HSM_KMS_KEY", SIGN)
     monkeypatch.setenv("HSM_KMS_DECRYPT_KEY", DECRYPT)
     assert mod._gcp_kms_identity_enabled() is True
+
+
+def test_old_key_public_key_read_is_typed():
+    from google.api_core import exceptions as gexc
+    prov, kms = provider()
+    old = RING + "sign/cryptoKeyVersions/0"
+    kms.keys[old] = ec.generate_private_key(ec.SECP256R1())
+    real = kms.get_public_key
+
+    def flaky(request):                           # metadata says ENABLED, then the key disappears
+        if request["name"] == old:
+            raise gexc.NotFound("destroyed in between")
+        return real(request)
+    kms.get_public_key = flaky
+    with pytest.raises(g.GcpKmsKeyUnavailable):
+        prov.public_key_pem_of_version(old)
+    kms.get_public_key = lambda request: (_ for _ in ()).throw(gexc.ServiceUnavailable("transient"))
+    with pytest.raises(gexc.ServiceUnavailable):
+        prov.public_key_pem_of_version(old)

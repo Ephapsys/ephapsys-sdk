@@ -1546,8 +1546,7 @@ class TrustedAgent:
             pinned = json.loads(out["detail"])
             from .crypto.gcp_kms import GcpKmsKeyUnavailable, spki_sha256
             try:
-                prov.require_usable(pinned["pinned_sign_key"])
-                old_spki = spki_sha256(prov.public_key_pem("sign", pinned["pinned_sign_key"]))
+                old_spki = spki_sha256(prov.public_key_pem_of_version(pinned["pinned_sign_key"]))
             except GcpKmsKeyUnavailable as exc:
                 old_spki = None
                 logger.warning("[TA] pinned signing key unavailable (%s); trying a recovery exchange", exc)
