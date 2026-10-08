@@ -85,7 +85,16 @@ def _pkcs11_identity_enabled() -> bool:
     return bool((os.getenv("PKCS11_MODULE") or "").strip())
 
 
+def _gcp_kms_identity_enabled() -> bool:
+    """Cloud KMS workloads (sign + decrypt keys configured) sign device-auth with the Cloud HSM signing key."""
+    from .crypto.gcp_kms import GcpKmsProvider
+    return GcpKmsProvider.configured()
+
+
 def _sign_identity_message(message: bytes, storage_dir: Optional[str]) -> bytes:
+    if _gcp_kms_identity_enabled():
+        from .crypto.gcp_kms import GcpKmsProvider
+        return GcpKmsProvider.shared().sign(message)
     if _pkcs11_identity_enabled():
         from .crypto.pkcs11 import Pkcs11Provider
         _alg, signature = Pkcs11Provider.from_env().sign(message)
@@ -185,6 +194,9 @@ def _exchange_identity_token(
         "challenge_nonce_b64": nonce_b64,
         "challenge_signature_b64": base64.b64encode(signature).decode("ascii"),
     }
+    if _gcp_kms_identity_enabled():
+        from .crypto.gcp_kms import GcpKmsProvider
+        body["workload_token"] = GcpKmsProvider.shared().workload_token(GcpKmsProvider.audience(base_url))
     try:
         resp = requests.post(url, json=body, timeout=15, verify=verify_ssl)
     except requests.RequestException as e:
@@ -276,7 +288,8 @@ def get_api_key(
     resolved_org = org_id or os.getenv("AOC_ORG_ID")
 
     identity_error: Optional[RuntimeError] = None
-    identity_key_present = _pkcs11_identity_enabled() or _identity_key_paths(storage_dir)[0].exists()
+    identity_key_present = (_gcp_kms_identity_enabled() or _pkcs11_identity_enabled()
+                            or _identity_key_paths(storage_dir)[0].exists())
     if resolved_instance and identity_key_present:
         try:
             return _exchange_identity_token(

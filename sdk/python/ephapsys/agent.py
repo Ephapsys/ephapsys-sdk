@@ -1405,6 +1405,11 @@ class TrustedAgent:
                 )
             raise ValueError("anchor must be one of: 'tpm', 'hsm', 'none'")
 
+        if anchor == "hsm" and evidence is None and self._gcp_kms_enabled():
+            if self._pkcs11_enabled():
+                raise RuntimeError("Ambiguous HSM configuration: both Cloud KMS keys and PKCS11_MODULE are set")
+            return self._adopt_instance(self._personalize_gcp_kms())
+
         chal = request(
             "POST",
             self.api_base,
@@ -1440,6 +1445,9 @@ class TrustedAgent:
             verify_ssl=self.verify_ssl,
         )
 
+        return self._adopt_instance(resp)
+
+    def _adopt_instance(self, resp: Dict[str, Any]) -> Dict[str, Any]:
         inst = resp.get("agent")
         if inst:
             logger.debug(
@@ -1469,6 +1477,68 @@ class TrustedAgent:
         return resp
 
 
+
+    # ---- Cloud KMS / Cloud HSM (cloud workloads) ------------------------------
+    def _gcp_kms_post(self, path: str, body: Dict[str, Any]) -> Tuple[int, Any]:
+        import requests as _rq
+        headers = {"Accept": "application/json"}
+        try:
+            headers.update(self._headers())        # a provisioning-exchange device token carries first-use authority
+        except Exception:
+            pass
+        resp = _rq.post(self.api_base.rstrip("/") + path, json=body, headers=headers, timeout=60,
+                        verify=self.verify_ssl)
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {"detail": resp.text}
+        return resp.status_code, payload
+
+    def _personalize_gcp_kms(self) -> Dict[str, Any]:
+        """Two-step personalization with Cloud HSM keys: begin (signed transcript + attestations, AOC returns an
+        RSA-OAEP challenge) -> finish (decrypted challenge). Rotates automatically when the configured keys differ
+        from the pinned ones (the pinned signing key co-signs); falls back to a recovery exchange when the old key
+        can no longer sign (requires a recovery authorization from deployment automation)."""
+        from .auth import resolve_device_id
+        from .crypto.gcp_kms import GcpKmsError
+        prov = self._gcp_kms_provider()
+        device = resolve_device_id(strict=True)
+        org = (os.getenv("AOC_ORG_ID") or "").strip()
+        if not org:
+            raise RuntimeError("AOC_ORG_ID is required for Cloud KMS personalization")
+        audience = prov.audience(self.api_base)
+        base = f"/agents/{self.agent_id}/hsm/gcp-kms"
+
+        def attempt(mode: str, **kw) -> Tuple[int, Any]:
+            token = prov.workload_token(audience)
+            code, chal = self._gcp_kms_post(base + "/challenge", {"org_id": org, "device_id": device,
+                                                                  "workload_token": token})
+            if code != 200:
+                raise RuntimeError(f"Cloud KMS challenge failed ({code}): {chal.get('detail')}")
+            ev = prov.evidence(nonce_b64=chal["nonce_b64"], org_id=chal["org_id"], template_id=chal["template_id"],
+                               device_id=device, token=token, mode=mode, **kw)
+            code, out = self._gcp_kms_post(base + "/begin", {"org_id": org, "evidence": ev})
+            if code != 200:
+                return code, out
+            fin = {"provider": "gcp-kms", "version": 1, "device_id": device, "workload_token": token,
+                   "pending_id": out["pending_id"], "challenge_b64": prov.answer(out["challenge_ct_b64"])}
+            return self._gcp_kms_post(base + "/finish", {"org_id": org, "evidence": fin})
+
+        code, out = attempt("personalize")
+        if code == 409 and "pinned_keys_differ" in str(out.get("detail")):
+            pinned = json.loads(out["detail"])
+            try:
+                old_pem = prov.public_key_pem("sign", pinned["pinned_sign_key"])
+                from .crypto.gcp_kms import spki_sha256
+                logger.info("[TA] Cloud KMS keys changed; rotating enrollment (co-signed by the pinned key)")
+                code, out = attempt("rotate", old_generation=pinned["generation"],
+                                    old_sign_key=pinned["pinned_sign_key"], old_sign_spki=spki_sha256(old_pem))
+            except GcpKmsError as exc:
+                logger.warning("[TA] pinned signing key unusable (%s); trying a recovery exchange", exc)
+                code, out = attempt("recover")
+        if code != 200:
+            raise RuntimeError(f"Cloud KMS personalization failed ({code}): {out.get('detail')}")
+        return out
 
     # ---- TPM evidence (Linux + tpm2-tools) -----------------------------------
     def _linux_os_release(self) -> Tuple[str, str]:
@@ -2169,7 +2239,7 @@ class TrustedAgent:
         return {}
 
     def _check_native_sie_entry(self, mid: str, entry: Dict[str, Any]) -> None:
-        """Native pinned (PKCS#11) path: every model's ECM arrives only as SIE ciphertext; no plaintext source."""
+        """Native pinned (PKCS#11 / Cloud KMS) path: every model's ECM arrives only as SIE ciphertext."""
         if not entry.get("cipher_ecm_uri") or entry.get("sie_wrapped_cek_b64") is None:
             raise SecureInferenceError(f"Native PKCS#11 manifest for model {mid} lacks SIE ciphertext/wrapped CEK")
         if not (entry.get("cipher_ecm_digest") or "").removeprefix("sha256:"):
@@ -2434,6 +2504,15 @@ class TrustedAgent:
     def _pkcs11_enabled(self) -> bool:
         return bool((os.getenv("PKCS11_MODULE") or "").strip())
 
+    def _gcp_kms_enabled(self) -> bool:
+        """Native Cloud KMS path: both the Cloud HSM signing key and the decrypt key are configured."""
+        from .crypto.gcp_kms import GcpKmsProvider
+        return GcpKmsProvider.configured()
+
+    def _gcp_kms_provider(self):
+        from .crypto.gcp_kms import GcpKmsProvider
+        return GcpKmsProvider.shared()
+
     def _pkcs11_provider(self):
         """Lazily construct the (fail-closed) PKCS#11 token provider from env; cached per agent."""
         prov = getattr(self, "_pkcs11_provider_cache", None)
@@ -2646,7 +2725,8 @@ class TrustedAgent:
             model_dir = self._cache_dir() / mid
             os.makedirs(model_dir, exist_ok=True)
 
-            strict_sie = self._pkcs11_enabled()
+            kms_sie = self._gcp_kms_enabled()
+            strict_sie = self._pkcs11_enabled() or kms_sie
             if strict_sie:
                 self._check_native_sie_entry(mid, entry)
 
@@ -2663,7 +2743,8 @@ class TrustedAgent:
                     state_dir=str(model_dir),
                     api_key=self.api_key,
                     verify_ssl=self.verify_ssl,
-                    **({"tpm_ecdh": self._pkcs11_provider().ecdh} if strict_sie
+                    **({"kms": self._gcp_kms_provider()} if kms_sie
+                       else {"tpm_ecdh": self._pkcs11_provider().ecdh} if strict_sie
                        else {"privkey_loader": lambda: self._load_kem_priv()}),
                     strict=strict_sie,
                 )
@@ -4790,7 +4871,8 @@ class SIEManager:
         privkey_pem: Optional[str] = None,                   # dev
         privkey_loader: Optional[Callable[[], str]] = None,  # dev
         tpm_ecdh: Optional[Callable[[bytes], bytes]] = None, # prod
-        strict: bool = False,                                # native pinned PKCS#11 path
+        strict: bool = False,                                # native pinned PKCS#11 / Cloud KMS path
+        kms: Any = None,                                     # Cloud KMS provider (envelope v2)
     ):
         self.strict     = bool(strict)
         self.base_url   = base_url.rstrip("/")
@@ -4806,6 +4888,7 @@ class SIEManager:
         self.privkey_pem     = privkey_pem
         self.privkey_loader  = privkey_loader
         self.tpm_ecdh        = tpm_ecdh
+        self.kms             = kms
         os.makedirs(self.state_dir, exist_ok=True)
 
     def _headers(self) -> dict:
@@ -4869,8 +4952,8 @@ class SIEManager:
             raise SecureInferenceError("Secure ECM not available (cipher_ecm_uri missing)")
         if self.strict and not c_dgst:
             raise SecureInferenceError("cipher_ecm_digest is required on the native PKCS#11 path")
-        if self.strict and self.tpm_ecdh is None:
-            raise SecureInferenceError("native PKCS#11 SIE requires token ECDH (no software KEM key)")
+        if self.strict and self.tpm_ecdh is None and self.kms is None:
+            raise SecureInferenceError("native SIE requires a hardware key (token ECDH or Cloud KMS)")
         if wrapped is None:
             # With SIE: we require a wrapped CEK (HPKE/ECIES). If you want TPM-sealed DEK-only mode, add a separate branch.
             raise SecureInferenceError("Missing wrapped CEK (sie_wrapped_cek_b64)")
@@ -4887,16 +4970,24 @@ class SIEManager:
             if got != c_dgst:
                 raise SecureInferenceError(f"cipher_ecm_digest mismatch (got {got}, want {c_dgst})")
 
-        # 4) unwrap CEK (HPKE/ECIES)
-        try:
-            cek = hpke.unwrap(
-                wrapped,
-                privkey_pem=self.privkey_pem,
-                privkey_loader=self.privkey_loader,
-                ecdh_with_ephemeral=self.tpm_ecdh,
-            )
-        except Exception as e:
-            raise SecureInferenceError(f"SIE unwrap failed: {e}")
+        # 4) unwrap CEK (HPKE/ECIES; Cloud KMS: RSA-OAEP envelope v2 with authenticated metadata)
+        aad = None
+        if self.kms is not None:
+            try:
+                opened = self.kms.unwrap_envelope(wrapped, expect_model_ids=[entry.get("id")])
+            except Exception as e:
+                raise SecureInferenceError(f"SIE unwrap failed: {e}")
+            cek, aad = opened["cek"], opened["aad"]
+        else:
+            try:
+                cek = hpke.unwrap(
+                    wrapped,
+                    privkey_pem=self.privkey_pem,
+                    privkey_loader=self.privkey_loader,
+                    ecdh_with_ephemeral=self.tpm_ecdh,
+                )
+            except Exception as e:
+                raise SecureInferenceError(f"SIE unwrap failed: {e}")
 
         # 5) decrypt to RAM; blob layout: [12-byte nonce][ciphertext+tag]
         if len(ct) < 13:
@@ -4904,7 +4995,7 @@ class SIEManager:
         nonce, body = ct[:12], ct[12:]
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         try:
-            pt = AESGCM(cek).decrypt(nonce, body, None)
+            pt = AESGCM(cek).decrypt(nonce, body, aad)
         except Exception as e:
             raise SecureInferenceError(f"SIE decrypt failed: {e}")
 
