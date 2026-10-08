@@ -88,9 +88,34 @@ EPHAPSYS_DEVICE_ID=device-0001              # stable device identity
 ```
 
 - Two separate, sensitive, non-extractable token keys: a **sign** key for personalization evidence and device authentication, and a **KEM** key (ECDH) that receives the model key and protects the encrypted-at-rest cache.
-- Keys must be enrolled with the AOC by an operator before personalization; the SDK never enrolls keys itself. `ephapsys hsm show-key` prints the public keys and SPKI SHA-256 fingerprints to register.
+- Keys are enrolled with the AOC either by an administrator, or automatically on the device's first personalization when the organization enables first-use enrollment. `ephapsys hsm show-key` prints the public keys and SPKI SHA-256 fingerprints.
 - Selection is fail-closed: ambiguous provider configuration (`PKCS11_MODULE` together with `HSM_HELPER`/`HSM_KMS_KEY`/`HSM_EVIDENCE_PATH`), missing or duplicate keys, extractable keys and unsupported mechanisms are all rejected.
 - Scope: token-backed key custody. Whether a token is hardware-backed depends on the deployed provider; SoftHSM is for testing only. PKCS#11 provides no measured-boot attestation, and decrypted model material is held in process memory while in use.
+
+### Google Cloud KMS / Cloud HSM (`hsm` anchor, cloud workloads)
+
+Agents running on Google Cloud (for example on GKE) can anchor in two Cloud HSM keys instead of a device token. Requires SDK >= 0.3.1:
+
+```bash
+pip install "ephapsys[hsm]"
+
+PERSONALIZE_ANCHOR=hsm
+HSM_KMS_KEY=projects/P/locations/L/keyRings/R/cryptoKeys/my-sign        # EC_SIGN_P256_SHA256, protection level HSM
+HSM_KMS_DECRYPT_KEY=projects/P/locations/L/keyRings/R/cryptoKeys/my-decrypt  # RSA_DECRYPT_OAEP_3072_SHA256, HSM
+EPHAPSYS_DEVICE_ID=my-agent-1               # unique and stable per replica
+AOC_ORG_ID=...
+AOC_PROVISIONING_TOKEN=...                  # needed only for each device's first personalization
+```
+
+- **Identity:** the workload runs as a dedicated Google service account (on GKE through Workload Identity). The SDK obtains a Google-signed ID token for it from the metadata server, with the AOC as audience (override with `EPHAPSYS_WORKLOAD_AUDIENCE`). No key files are needed.
+- **Organization setup:** once per organization, an administrator records in the AOC which service accounts the organization trusts for which agent templates and key names. Nothing is done per device after that.
+- **Personalization:** two steps. The SDK sends a transcript signed in Cloud HSM together with both keys' Cloud HSM attestations, then answers an encrypted challenge with the decrypt key. The ECM content key is wrapped to the decrypt key (RSA-OAEP).
+- **Lifecycle:** before `prepare_runtime()` the SDK reconciles its enrollment with the configured keys (`reconcile_gcp_kms()`).
+  - New key versions (a CryptoKey name resolves to its newest enabled version) make it rotate, co-signed by the previous key.
+  - A previous key that can no longer be used (disabled, destroyed or not found) makes it complete a recovery that your deployment automation authorized.
+  - A revoked enrollment fails closed.
+  - Device tokens are renewed automatically.
+- **Integrity:** every Cloud KMS call is integrity-checked (CRC32C) and must report protection level `HSM`. Long-term private keys never leave Cloud HSM; a decrypted content key is held in process memory while in use.
 
 Runtime download tuning (optional):
 ```bash
