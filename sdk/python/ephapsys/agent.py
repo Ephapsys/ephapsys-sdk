@@ -512,13 +512,20 @@ class TrustedAgent:
         self.agent_id = agent_id
         # self.api_base = api_base.rstrip("/")
         self.api_base = api_base
-        self.api_key = get_api_key(
-            api_key,
-            base_url=api_base,
-            agent_instance_id=agent_id,
-            storage_dir=storage_dir,
-            verify_ssl=verify_ssl,
-        )
+        try:
+            self.api_key = get_api_key(
+                api_key,
+                base_url=api_base,
+                agent_instance_id=agent_id,
+                storage_dir=storage_dir,
+                verify_ssl=verify_ssl,
+            )
+        except RuntimeError:
+            # A Cloud KMS workload whose instance was retired by a key rotation cannot prove its old identity; it
+            # re-personalizes in reconcile_gcp_kms() (prepare_runtime) instead of failing at construction.
+            if not (os.getenv("HSM_KMS_KEY") and os.getenv("HSM_KMS_DECRYPT_KEY")):
+                raise
+            self.api_key = None
         self.verify_ssl = verify_ssl
         self.storage_dir = pathlib.Path(storage_dir)
         _mkdir(self.storage_dir)
@@ -569,6 +576,11 @@ class TrustedAgent:
                 agent_instance_id=self.agent_id,
                 verify_ssl=self.verify_ssl,
             )
+        elif self._gcp_kms_enabled() and self._gcp_kms_state().get("instance_id") == self.agent_id:
+            # Cloud KMS instances renew their short-lived device token by identity challenge (Cloud HSM signature
+            # plus workload identity), so expiry never needs a restart or a provisioning token.
+            self.api_key = get_api_key(None, base_url=self.api_base, agent_instance_id=self.agent_id,
+                                       storage_dir=str(self.storage_dir), verify_ssl=self.verify_ssl)
         return {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
 
     def set_av_scanner(self, scanner: Callable[[bytes], bool]) -> None:
@@ -1408,7 +1420,10 @@ class TrustedAgent:
         if anchor == "hsm" and evidence is None and self._gcp_kms_enabled():
             if self._pkcs11_enabled():
                 raise RuntimeError("Ambiguous HSM configuration: both Cloud KMS keys and PKCS11_MODULE are set")
-            return self._adopt_instance(self._personalize_gcp_kms())
+            resp = self._adopt_instance(self._personalize_gcp_kms())
+            self.api_key = get_api_key(None, base_url=self.api_base, agent_instance_id=self.agent_id,
+                                       storage_dir=str(self.storage_dir), verify_ssl=self.verify_ssl)
+            return resp
 
         chal = request(
             "POST",
@@ -1507,7 +1522,8 @@ class TrustedAgent:
         if not org:
             raise RuntimeError("AOC_ORG_ID is required for Cloud KMS personalization")
         audience = prov.audience(self.api_base)
-        base = f"/agents/{self.agent_id}/hsm/gcp-kms"
+        base = f"/agents/{self._gcp_kms_state().get('template_id') or self.agent_id}/hsm/gcp-kms"
+        seen: Dict[str, str] = {}
 
         def attempt(mode: str, **kw) -> Tuple[int, Any]:
             token = prov.workload_token(audience)
@@ -1515,6 +1531,7 @@ class TrustedAgent:
                                                                   "workload_token": token})
             if code != 200:
                 raise RuntimeError(f"Cloud KMS challenge failed ({code}): {chal.get('detail')}")
+            seen["template_id"] = chal["template_id"]
             ev = prov.evidence(nonce_b64=chal["nonce_b64"], org_id=chal["org_id"], template_id=chal["template_id"],
                                device_id=device, token=token, mode=mode, **kw)
             code, out = self._gcp_kms_post(base + "/begin", {"org_id": org, "evidence": ev})
@@ -1527,18 +1544,80 @@ class TrustedAgent:
         code, out = attempt("personalize")
         if code == 409 and "pinned_keys_differ" in str(out.get("detail")):
             pinned = json.loads(out["detail"])
+            from .crypto.gcp_kms import GcpKmsKeyUnavailable, spki_sha256
             try:
-                old_pem = prov.public_key_pem("sign", pinned["pinned_sign_key"])
-                from .crypto.gcp_kms import spki_sha256
+                prov.require_usable(pinned["pinned_sign_key"])
+                old_spki = spki_sha256(prov.public_key_pem("sign", pinned["pinned_sign_key"]))
+            except GcpKmsKeyUnavailable as exc:
+                old_spki = None
+                logger.warning("[TA] pinned signing key unavailable (%s); trying a recovery exchange", exc)
+            if old_spki:
                 logger.info("[TA] Cloud KMS keys changed; rotating enrollment (co-signed by the pinned key)")
-                code, out = attempt("rotate", old_generation=pinned["generation"],
-                                    old_sign_key=pinned["pinned_sign_key"], old_sign_spki=spki_sha256(old_pem))
-            except GcpKmsError as exc:
-                logger.warning("[TA] pinned signing key unusable (%s); trying a recovery exchange", exc)
+                try:
+                    code, out = attempt("rotate", old_generation=pinned["generation"],
+                                        old_sign_key=pinned["pinned_sign_key"], old_sign_spki=old_spki)
+                except GcpKmsKeyUnavailable as exc:
+                    logger.warning("[TA] pinned signing key became unavailable (%s); trying recovery", exc)
+                    old_spki = None
+            if not old_spki:
                 code, out = attempt("recover")
         if code != 200:
             raise RuntimeError(f"Cloud KMS personalization failed ({code}): {out.get('detail')}")
+        inst = out.get("agent") or {}
+        bound = inst.get("hsm_enrollment") or {}
+        self._save_gcp_kms_state({"template_id": seen.get("template_id"),
+                                  "instance_id": inst.get("did") or inst.get("public_id") or str(inst.get("_id") or ""),
+                                  "generation": bound.get("generation"), "sign_key": bound.get("sign_key"),
+                                  "decrypt_key": bound.get("decrypt_key")})
         return out
+
+    # ---- Cloud KMS state and reconciliation -----------------------------------
+    def _gcp_kms_state_path(self) -> pathlib.Path:
+        return self.storage_dir / "gcpkms_state.json"
+
+    def _gcp_kms_state(self) -> Dict[str, Any]:
+        try:
+            return json.loads(self._gcp_kms_state_path().read_text())
+        except Exception:
+            return {}
+
+    def _save_gcp_kms_state(self, state: Dict[str, Any]) -> None:
+        path = self._gcp_kms_state_path()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, sort_keys=True))
+        os.replace(tmp, path)
+
+    def reconcile_gcp_kms(self) -> bool:
+        """Bring a Cloud KMS workload's enrollment in line with its configured keys. Returns True when it
+        re-personalized. Runs before prepare_runtime(); safe to call any time.
+
+        - configured key versions differ from the pinned ones (keys were rotated) -> rotate (pinned key co-signs),
+          or recover when the pinned key can no longer sign;
+        - this process's instance belongs to a retired generation (another process rotated) -> re-personalize;
+        - enrollment revoked -> fail closed."""
+        from .auth import resolve_device_id
+        state = self._gcp_kms_state()
+        if not state.get("instance_id"):
+            return False                                     # never personalized here: the app calls personalize()
+        prov = self._gcp_kms_provider()
+        org = (os.getenv("AOC_ORG_ID") or "").strip()
+        device = resolve_device_id(strict=True)
+        token = prov.workload_token(prov.audience(self.api_base))
+        code, st = self._gcp_kms_post(f"/agents/{state['template_id']}/hsm/gcp-kms/status",
+                                      {"org_id": org, "device_id": device, "workload_token": token})
+        if code != 200:
+            raise RuntimeError(f"Cloud KMS status failed ({code}): {st.get('detail')}")
+        if not st.get("enrolled") or not st.get("active"):
+            raise SecureInferenceError("Cloud KMS enrollment for this device is revoked or missing")
+        current = (st.get("sign_key") == prov.sign_key and st.get("decrypt_key") == prov.decrypt_key
+                   and st.get("generation") == state.get("generation") and self.agent_id == state.get("instance_id"))
+        if current:
+            return False
+        logger.info("[TA] Cloud KMS enrollment out of date (keys or generation changed); re-personalizing")
+        self._adopt_instance(self._personalize_gcp_kms())
+        self.api_key = get_api_key(None, base_url=self.api_base, agent_instance_id=self.agent_id,
+                                   storage_dir=str(self.storage_dir), verify_ssl=self.verify_ssl)
+        return True
 
     # ---- TPM evidence (Linux + tpm2-tools) -----------------------------------
     def _linux_os_release(self) -> Tuple[str, str]:
@@ -2622,6 +2701,8 @@ class TrustedAgent:
         pass force=True to refresh the cached runtimes.
         progress_cb: optional callback(bytes_downloaded, total_bytes) for download progress.
         """
+        if self._gcp_kms_enabled() and self.reconcile_gcp_kms():
+            force = True                                     # new instance: never reuse the retired one's runtime
         self._runtime_progress_cb = progress_cb
         try:
             runtimes = self._ensure_runtime(force=force)

@@ -46,6 +46,19 @@ class GcpKmsError(RuntimeError):
     """Any Cloud KMS configuration, integrity or policy failure (always fail closed)."""
 
 
+class GcpKmsKeyUnavailable(GcpKmsError):
+    """A specific key version can no longer be used: disabled, scheduled for destruction, destroyed, missing, or
+    no longer usable by this identity. Only this condition may trigger the recovery fallback."""
+
+
+def _unavailable_errors():
+    try:
+        from google.api_core import exceptions as gexc
+        return (gexc.NotFound, gexc.Forbidden, gexc.FailedPrecondition)
+    except ImportError:                              # client doubles in tests
+        return ()
+
+
 # --------------------------------------------------------------------------------------------- helpers
 _CRC_TABLE = []
 for _i in range(256):
@@ -259,6 +272,25 @@ class GcpKmsProvider:
         except Exception as exc:
             raise GcpKmsError("workload identity token is malformed") from exc
 
+    def require_usable(self, name: str) -> None:
+        """Raise GcpKmsKeyUnavailable when a key version is not ENABLED or cannot be read by this identity."""
+        try:
+            version = self._client.get_crypto_key_version(request={"name": name})
+        except _unavailable_errors() as exc:
+            raise GcpKmsKeyUnavailable(f"{name}: {exc.__class__.__name__}") from exc
+        state = getattr(getattr(version, "state", None), "name", getattr(version, "state", None))
+        if state != "ENABLED":
+            raise GcpKmsKeyUnavailable(f"{name} is {state}")
+
+    def sign_with_version(self, message: bytes, name: str) -> bytes:
+        """Sign with a specific (older) version; its unavailability is reported as GcpKmsKeyUnavailable."""
+        self.require_usable(name)
+        try:
+            self.public_key_pem("sign", name)
+            return self.sign(message, name=name)
+        except _unavailable_errors() as exc:
+            raise GcpKmsKeyUnavailable(f"{name}: {exc.__class__.__name__}") from exc
+
     # -- personalization ------------------------------------------------------------------------------
     def evidence(self, *, nonce_b64: str, org_id: str, template_id: str, device_id: str, token: str,
                  mode: str = "personalize", old_generation: str = "none", old_sign_key: Optional[str] = None,
@@ -278,7 +310,7 @@ class GcpKmsProvider:
         if attest:
             ev["attestations"] = {"sign": self.attestation("sign"), "decrypt": self.attestation("decrypt")}
         if old_sign_key:
-            ev["rotation_sig_b64"] = base64.b64encode(self.sign(message, name=old_sign_key)).decode()
+            ev["rotation_sig_b64"] = base64.b64encode(self.sign_with_version(message, old_sign_key)).decode()
         return ev
 
     def answer(self, challenge_ct_b64: str) -> str:

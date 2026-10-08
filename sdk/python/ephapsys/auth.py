@@ -86,9 +86,9 @@ def _pkcs11_identity_enabled() -> bool:
 
 
 def _gcp_kms_identity_enabled() -> bool:
-    """Cloud KMS workloads (sign + decrypt keys configured) sign device-auth with the Cloud HSM signing key."""
-    from .crypto.gcp_kms import GcpKmsProvider
-    return GcpKmsProvider.configured()
+    """Cloud KMS workloads (sign + decrypt keys configured) sign device-auth with the Cloud HSM signing key.
+    Detected from the environment only, so the KMS module is imported only when it is configured."""
+    return bool((os.getenv("HSM_KMS_KEY") or "").strip() and (os.getenv("HSM_KMS_DECRYPT_KEY") or "").strip())
 
 
 def _sign_identity_message(message: bytes, storage_dir: Optional[str]) -> bytes:

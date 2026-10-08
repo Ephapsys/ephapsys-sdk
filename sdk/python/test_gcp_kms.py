@@ -62,7 +62,8 @@ class FakeKms:
 
     def get_crypto_key_version(self, request):
         chains = SimpleNamespace(cavium_certs=["C1", "C2"], google_card_certs=["G1"], google_partition_certs=["G2"])
-        return SimpleNamespace(attestation=SimpleNamespace(format=SimpleNamespace(name="CAVIUM_V2_COMPRESSED"),
+        return SimpleNamespace(state=SimpleNamespace(name="ENABLED"),
+                               attestation=SimpleNamespace(format=SimpleNamespace(name="CAVIUM_V2_COMPRESSED"),
                                                            content=b"att:" + request["name"].encode(), cert_chains=chains))
 
 
@@ -231,3 +232,45 @@ def test_storage_refuses_ambiguous_or_switched_providers(kms_storage, monkeypatc
     monkeypatch.setenv("EPHAPSYS_KEY_PROVIDER", "pkcs11")
     with pytest.raises(storage.KeyProviderError, match="different key provider"):
         storage.write_encrypted(state, "a", b"x")
+
+
+# ---------------------------------------------------------------------------------------------- recovery triggers
+
+def test_only_key_unavailability_triggers_recovery():
+    from google.api_core import exceptions as gexc
+    prov, kms = provider()
+    old = RING + "sign/cryptoKeyVersions/0"
+    kms.keys[old] = ec.generate_private_key(ec.SECP256R1())
+    states = {old: "DISABLED"}
+    errors = {}
+
+    def version(request):
+        if request["name"] in errors:
+            raise errors[request["name"]]
+        return SimpleNamespace(state=SimpleNamespace(name=states.get(request["name"], "ENABLED")),
+                               attestation=None)
+    kms.get_crypto_key_version = version
+    with pytest.raises(g.GcpKmsKeyUnavailable, match="DISABLED"):
+        prov.sign_with_version(b"m", old)
+    for exc in (gexc.PermissionDenied("gone"), gexc.NotFound("gone"), gexc.FailedPrecondition("destroyed")):
+        errors[old] = exc
+        with pytest.raises(g.GcpKmsKeyUnavailable):
+            prov.require_usable(old)
+    errors[old] = gexc.ServiceUnavailable("transient")          # transport/availability: never a recovery trigger
+    with pytest.raises(gexc.ServiceUnavailable):
+        prov.require_usable(old)
+    del errors[old]
+    states[old] = "ENABLED"
+    assert prov.sign_with_version(b"m", old)
+
+
+def test_auth_detects_kms_without_importing_it(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("isolated_auth", os.path.join(os.path.dirname(__file__), "ephapsys", "auth.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.delenv("HSM_KMS_KEY", raising=False)
+    assert mod._gcp_kms_identity_enabled() is False
+    monkeypatch.setenv("HSM_KMS_KEY", SIGN)
+    monkeypatch.setenv("HSM_KMS_DECRYPT_KEY", DECRYPT)
+    assert mod._gcp_kms_identity_enabled() is True
