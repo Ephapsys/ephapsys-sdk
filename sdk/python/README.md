@@ -108,7 +108,7 @@ AOC_PROVISIONING_TOKEN=...                  # needed only for each device's firs
 ```
 
 - **Identity:** the workload runs as a dedicated Google service account (on GKE through Workload Identity). The SDK obtains a Google-signed ID token for it from the metadata server, with the AOC as audience (override with `EPHAPSYS_WORKLOAD_AUDIENCE`). No key files are needed.
-- **Organization setup:** once per organization, an administrator records in the AOC which service accounts the organization trusts for which agent templates and key names. Nothing is done per device after that.
+- **Organization setup:** once per deployment, an organization admin trusts its Google service accounts in the AOC under **Organization → Cloud KMS**. If an agent starts before that, the AOC refuses it with a message saying exactly that, and the attempt appears on that page under "Waiting for approval" so an admin can approve it in one step. Nothing is done per device after that.
 - **Personalization:** two steps. The SDK sends a transcript signed in Cloud HSM together with both keys' Cloud HSM attestations, then answers an encrypted challenge with the decrypt key. The ECM content key is wrapped to the decrypt key (RSA-OAEP).
 - **Lifecycle:** before `prepare_runtime()` the SDK reconciles its enrollment with the configured keys (`reconcile_gcp_kms()`).
   - New key versions (a CryptoKey name resolves to its newest enabled version) make it rotate, co-signed by the previous key.
