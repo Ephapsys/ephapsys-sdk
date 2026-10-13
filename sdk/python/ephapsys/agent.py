@@ -3540,6 +3540,9 @@ class TrustedAgent:
             _soft_fail("[SDK][ECM] lambda_ecm parameter missing after injection")
             return
 
+        if not torch.is_tensor(ecm_tensor):
+            _soft_fail("[SDK][ECM] ECM payload is %s, not a tensor", type(ecm_tensor).__name__)
+            return
         if ecm_tensor.numel() != Lambda_param.numel():
             _soft_fail(
                 "[SDK][ECM] ECM tensor shape %s does not fit this model (expects %s); "
