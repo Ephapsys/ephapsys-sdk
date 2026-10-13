@@ -3540,6 +3540,14 @@ class TrustedAgent:
             _soft_fail("[SDK][ECM] lambda_ecm parameter missing after injection")
             return
 
+        if ecm_tensor.numel() != Lambda_param.numel():
+            _soft_fail(
+                "[SDK][ECM] ECM tensor shape %s does not fit this model (expects %s); "
+                "the ECM was built for a different hidden size, re-publish the model",
+                tuple(ecm_tensor.shape), tuple(Lambda_param.shape),
+            )
+            return
+
         try:
             shaped = ecm_tensor.to(Lambda_param.device, dtype=Lambda_param.dtype)
             if shaped.shape != Lambda_param.shape:

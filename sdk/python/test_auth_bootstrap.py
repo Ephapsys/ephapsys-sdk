@@ -153,3 +153,83 @@ def test_check_helloworld_bootstrap(monkeypatch):
         agent_template_id="agent_temp_demo",
     )
     assert out["ready"] is True
+
+
+def _identity_fails(monkeypatch, message="Device auth challenge failed (404): agent instance not found"):
+    monkeypatch.setenv("AOC_ORG_ID", "org_demo")
+    monkeypatch.setenv("AOC_BASE_URL", "http://localhost:7001")
+    monkeypatch.setattr(auth, "_pkcs11_identity_enabled", lambda: True)
+    auth._TOKEN_CACHE.clear()
+
+    def _fail(**kw):
+        raise RuntimeError(message)
+    monkeypatch.setattr(auth, "_exchange_identity_token", _fail)
+
+
+def test_both_exchanges_failing_reports_both(monkeypatch, caplog):
+    """#190: the identity error used to be dropped when the provisioning fallback also failed."""
+    _identity_fails(monkeypatch)
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-secret-value")
+    monkeypatch.setattr(auth.requests, "post", lambda url, json, timeout, verify: _Resp(
+        403, {"detail": "enrolled HSM instances require device-key proof"}))
+    with caplog.at_level("WARNING", logger="ephapsys.auth"):
+        try:
+            auth.get_api_key(None, base_url="http://localhost:7001", agent_instance_id="did:inst")
+        except RuntimeError as exc:
+            msg = str(exc)
+            assert msg.startswith("Device identity exchange failed: Device auth challenge failed (404)")
+            assert "require device-key proof" in msg
+            assert isinstance(exc.__cause__, RuntimeError) and "404" in str(exc.__cause__)
+        else:
+            raise AssertionError("expected RuntimeError")
+    assert "agent instance not found" in caplog.text
+    assert "boot-secret-value" not in msg and "boot-secret-value" not in caplog.text
+
+
+def test_identity_fails_but_fallback_succeeds(monkeypatch, caplog):
+    _identity_fails(monkeypatch)
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-token")
+    monkeypatch.setattr(auth.requests, "post", lambda url, json, timeout, verify: _Resp(
+        200, {"access_token": "jwt-fallback", "expires_in": 600}))
+    with caplog.at_level("WARNING", logger="ephapsys.auth"):
+        assert auth.get_api_key(None, base_url="http://localhost:7001", agent_instance_id="did:inst2") == "jwt-fallback"
+    assert "Device identity exchange failed" in caplog.text
+
+
+def test_identity_only_failure_is_raised_unchanged(monkeypatch):
+    _identity_fails(monkeypatch, "Device auth challenge failed (409): agent instance not personalized")
+    monkeypatch.delenv("AOC_PROVISIONING_TOKEN", raising=False)
+    try:
+        auth.get_api_key(None, base_url="http://localhost:7001", agent_instance_id="did:inst")
+    except RuntimeError as exc:
+        assert str(exc) == "Device auth challenge failed (409): agent instance not personalized"
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_provisioning_only_failure_is_raised_unchanged(monkeypatch):
+    monkeypatch.setenv("AOC_ORG_ID", "org_demo")
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-token")
+    monkeypatch.setattr(auth, "_pkcs11_identity_enabled", lambda: False)
+    monkeypatch.setattr(auth, "_gcp_kms_identity_enabled", lambda: False)
+    auth._TOKEN_CACHE.clear()
+    monkeypatch.setattr(auth.requests, "post", lambda url, json, timeout, verify: _Resp(401, {"detail": "token expired"}))
+    try:
+        auth.get_api_key(None, base_url="http://localhost:7001", agent_instance_id="did:inst3",
+                         storage_dir="/nonexistent-ephapsys-state")
+    except RuntimeError as exc:
+        assert "token expired" in str(exc) and "identity" not in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_identity_failure_with_fallback_missing_org(monkeypatch):
+    _identity_fails(monkeypatch)
+    monkeypatch.delenv("AOC_ORG_ID")
+    monkeypatch.setenv("AOC_PROVISIONING_TOKEN", "boot-token")
+    try:
+        auth.get_api_key(None, base_url="http://localhost:7001", agent_instance_id="did:inst")
+    except RuntimeError as exc:
+        assert "Device identity exchange failed" in str(exc) and "Missing AOC_ORG_ID" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
