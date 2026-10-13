@@ -2,12 +2,15 @@
 import os
 import time
 import base64
+import logging
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+
+logger = logging.getLogger("ephapsys.auth")
 
 _TOKEN_CACHE: Dict[Tuple[str, str, str, str], Tuple[str, float]] = {}
 
@@ -305,16 +308,28 @@ def get_api_key(
 
     provisioning_token = os.getenv("AOC_PROVISIONING_TOKEN")
     if provisioning_token:
-        if not resolved_org:
-            raise RuntimeError("Missing AOC_ORG_ID for provisioning token exchange")
-        return _exchange_provisioning_token(
-            base_url=resolved_base,
-            org_id=resolved_org,
-            provisioning_token=provisioning_token,
-            device_id=resolved_device,
-            agent_instance_id=resolved_instance,
-            verify_ssl=resolved_verify,
-        )
+        if identity_error is not None:
+            logger.warning("[auth] Device identity exchange failed (%s); trying the provisioning token", identity_error)
+        try:
+            if not resolved_org:
+                raise RuntimeError("Missing AOC_ORG_ID for provisioning token exchange")
+            return _exchange_provisioning_token(
+                base_url=resolved_base,
+                org_id=resolved_org,
+                provisioning_token=provisioning_token,
+                device_id=resolved_device,
+                agent_instance_id=resolved_instance,
+                verify_ssl=resolved_verify,
+            )
+        except RuntimeError as provisioning_error:
+            if identity_error is None:
+                raise
+            # Both failed: the identity error is usually the real fault (an enrolled HSM
+            # instance can only use it), so it leads and is the chained cause.
+            raise RuntimeError(
+                f"Device identity exchange failed: {identity_error}; "
+                f"provisioning token fallback also failed: {provisioning_error}"
+            ) from identity_error
 
     if identity_error is not None:
         raise identity_error
