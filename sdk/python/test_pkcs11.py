@@ -515,6 +515,16 @@ def test_ecm_apply_fails_closed_when_required():
 # ---------------------------------------------------------------------------
 from ephapsys.crypto import pkcs11_provision as prov_mod  # noqa: E402
 
+_REAL_LOCK_DIR = prov_mod._lock_dir
+
+
+@pytest.fixture(autouse=True)
+def _lock_namespace(tmp_path_factory, monkeypatch):
+    """Keep module locks out of the developer's home directory during tests."""
+    base = tmp_path_factory.mktemp("lockns")
+    base.chmod(0o700)
+    monkeypatch.setattr(prov_mod, "_lock_dir", lambda: str(base / "locks"))
+
 
 def _pcfg(label, pin_file, sign="ephapsys-sign", kem="ephapsys-kem", **over):
     return p11.Pkcs11Config(module=SOFTHSM_LIB, token_label=label, pin_file=str(pin_file),
@@ -751,6 +761,56 @@ def test_provision_refuses_a_second_run_on_the_same_module(token_env, tmp_path):
             prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
     finally:
         os.close(fd)
+
+
+def test_module_lock_namespace_ignores_temp_and_home_environment(monkeypatch, tmp_path):
+    import pwd
+    expected = os.path.join(pwd.getpwuid(os.geteuid()).pw_dir, ".ephapsys", "locks")
+    for tmp, home in (("A", "/nonexistent-A"), ("B", "/nonexistent-B")):
+        monkeypatch.setattr(prov_mod.tempfile, "gettempdir", lambda t=tmp: str(tmp_path / t))
+        monkeypatch.setenv("TMPDIR", str(tmp_path / tmp))
+        monkeypatch.setenv("HOME", home)
+        assert _REAL_LOCK_DIR() == expected
+    assert prov_mod.ROOT_LOCK_DIR in ("/run/ephapsys", "/var/run/ephapsys")
+
+
+def test_module_lock_held_from_another_temp_environment_still_blocks(token_env, tmp_path, monkeypatch):
+    (tmp_path / "b").mkdir(mode=0o700)
+    pin_file = _secret(tmp_path / "b" / "pin", PIN)
+    monkeypatch.setattr(prov_mod.tempfile, "gettempdir", lambda: str(tmp_path / "A"))
+    fd = _hold(prov_mod._module_lock_path(SOFTHSM_LIB))
+    monkeypatch.setattr(prov_mod.tempfile, "gettempdir", lambda: str(tmp_path / "B"))
+    try:
+        with pytest.raises(p11.Pkcs11Error, match="another provisioning run"):
+            prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
+    finally:
+        os.close(fd)
+
+
+def test_provision_refuses_untrusted_lock_directory(token_env, tmp_path, monkeypatch):
+    ns = tmp_path / "ns"
+    ns.mkdir()
+    ns.chmod(0o777)
+    monkeypatch.setattr(prov_mod, "_lock_dir", lambda: str(ns))
+    with pytest.raises(p11.Pkcs11Error, match="writable by group or others"):
+        prov_mod.provision(_pcfg(TOKEN, _secret(tmp_path / "pin", PIN), sign="sign", kem="kem"))
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory", "hardlink"])
+def test_provision_refuses_untrusted_lock_entry(token_env, tmp_path, kind):
+    pin_file = _secret(tmp_path / "pin", PIN)
+    lock = prov_mod._module_lock_path(SOFTHSM_LIB)
+    if kind == "symlink":
+        os.symlink(str(tmp_path / "elsewhere"), lock)
+    elif kind == "directory":
+        os.mkdir(lock)
+    else:
+        os.link(str(_secret(tmp_path / "other", "x")), lock)
+    try:
+        with pytest.raises(p11.Pkcs11Error, match="lock"):
+            prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
+    finally:
+        os.rmdir(lock) if kind == "directory" else os.unlink(lock)
 
 
 # ---- recovery record is validated before any delete or replace (R228) ----------------------------------

@@ -41,7 +41,7 @@ from .pkcs11 import Pkcs11Config, Pkcs11Error, Pkcs11Provider, _import_pkcs11, s
 
 SO_PENDING_SUFFIX = ".so-pending"
 DIR_LOCK_NAME = ".ephapsys-pkcs11.lock"            # serialises every run writing into a PIN directory
-MODULE_LOCK_DIRS = ("/run/lock", "/var/lock")      # then the temp dir; serialises every run on one module
+ROOT_LOCK_DIR = "/run/ephapsys" if os.path.isdir("/run") else "/var/run/ephapsys"
 TMP_PREFIX = ".ephapsys-provision-"
 MIN_PIN_LEN, MAX_PIN_LEN = 4, 64                         # within the bounds of common tokens (OP-TEE, SoftHSM)
 
@@ -155,18 +155,38 @@ def _cleanup_orphans(d: str) -> None:
                 os.unlink(p)
 
 
+def _lock_dir() -> str:
+    """Fixed per-user lock namespace, independent of TMPDIR, HOME or the PIN file location: ROOT_LOCK_DIR for
+    root (the installer), else ~/.ephapsys/locks from the account database. Runs by different users are not
+    serialised against each other; provisioning a device token is a root operation."""
+    if os.geteuid() == 0:
+        return ROOT_LOCK_DIR
+    import pwd
+    return os.path.join(pwd.getpwuid(os.geteuid()).pw_dir, ".ephapsys", "locks")
+
+
+def _owned_dir(d: str) -> str:
+    """Create `d` (0700) if absent; it must be a real directory owned by the invoking user and not writable by
+    group or others, so no one else can create, replace or unlink entries in it."""
+    if not os.path.lexists(d):
+        os.makedirs(d, mode=0o700)
+    _check_dir(d)
+    if os.lstat(d).st_uid != os.geteuid():
+        raise Pkcs11Error(f"lock directory {d} must be owned by the invoking user (uid {os.geteuid()})")
+    return d
+
+
 def _module_lock_path(module: str) -> str:
-    """One lock file per PKCS#11 module (by canonical path), independent of the PIN file location."""
-    name = "ephapsys-pkcs11-" + hashlib.sha256(os.path.realpath(module).encode()).hexdigest()[:16] + ".lock"
-    for d in MODULE_LOCK_DIRS + (tempfile.gettempdir(),):
-        if os.path.isdir(d) and os.access(d, os.W_OK):
-            return os.path.join(d, name)
-    raise Pkcs11Error("no writable lock directory for the module lock")
+    """One lock file per PKCS#11 module (by canonical path) in the protected lock namespace."""
+    name = "pkcs11-" + hashlib.sha256(os.path.realpath(module).encode()).hexdigest()[:16] + ".lock"
+    return os.path.join(_owned_dir(_lock_dir()), name)
 
 
 class _Lock:
     """Exclusive, non-blocking flock. A run takes the module lock, then the PIN directory lock, and holds both
-    from discovery through final validation; a concurrent run fails immediately instead of waiting."""
+    from discovery through final validation; a concurrent run fails immediately instead of waiting. Lock files
+    live in directories only the invoking user can write, must be regular files that user owns, and are never
+    unlinked, so every run on the same module and directory contends for the same inode."""
 
     def __init__(self, path: str):
         self.path, self.fd = path, -1
@@ -174,14 +194,23 @@ class _Lock:
     def __enter__(self):
         import fcntl                                     # POSIX only, like the PIN file ownership model
         try:
-            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        except PermissionError:                          # created by another user in a shared lock directory
-            self.fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), 0o600)
         except OSError as exc:
+            raise Pkcs11Error(f"cannot open lock {self.path} (symlinks and foreign files are refused): {exc}") from exc
+        try:
+            st = os.fstat(self.fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_nlink != 1:
+                raise Pkcs11Error(f"lock {self.path} must be a regular file owned by uid {os.geteuid()}")
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise Pkcs11Error(f"another provisioning run holds {self.path}") from exc
+            cur = os.lstat(self.path)                    # still the entry we locked (not unlinked or replaced)
+            if (cur.st_dev, cur.st_ino) != (st.st_dev, st.st_ino):
+                raise Pkcs11Error(f"lock {self.path} was replaced while being acquired; rerun provisioning")
+        except BaseException:
             os.close(self.fd)
-            raise Pkcs11Error(f"another provisioning run holds {self.path}") from exc
+            raise
         return self
 
     def __exit__(self, *exc):
