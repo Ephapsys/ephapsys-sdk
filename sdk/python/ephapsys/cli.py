@@ -345,6 +345,22 @@ def do_hsm_show_key(args):
     print(json.dumps(out, indent=2))
     return 0
 
+def do_hsm_provision(args):
+    """Initialise the PKCS#11 token, PIN file and sign/KEM keys if absent (reads PKCS11_* env). Idempotent:
+    never re-initialises a token, overwrites a PIN file or replaces a key. Prints SPKI fingerprints."""
+    from .crypto.pkcs11 import Pkcs11Config, Pkcs11Error
+    from .crypto.pkcs11_provision import provision
+    init_slot = args.init_slot
+    if init_slot is not None and init_slot != "first":
+        init_slot = int(init_slot) if init_slot.isdigit() else -1   # -1 is rejected by provision()
+    try:
+        report = provision(Pkcs11Config.from_env(), pin_group=args.pin_group, init_slot=init_slot)
+    except Pkcs11Error as exc:
+        print(json.dumps({"status": "refused", "error": str(exc)}, indent=2))
+        return 2
+    print(json.dumps(report, indent=2))
+    return 0
+
 # ---------------- Parser Builder ----------------
 def build_parser():
     p = argparse.ArgumentParser(
@@ -484,6 +500,10 @@ def build_parser():
     hsub = hsm.add_subparsers(dest="sub", required=True)
     hshow = hsub.add_parser("show-key", help="Show token public keys + SPKI SHA-256 for operator enrollment (reads PKCS11_* env)")
     hshow.set_defaults(func=do_hsm_show_key)
+    hprov = hsub.add_parser("provision", help="Initialise token + PIN file + sign/KEM keys if absent; idempotent (reads PKCS11_* env)")
+    hprov.add_argument("--pin-group", help="Group allowed to read the PIN file (file is root:<group> 0440; default root-only 0400)")
+    hprov.add_argument("--init-slot", help="Slot id to initialise, or 'first', when the module has several uninitialised tokens (default: refuse)")
+    hprov.set_defaults(func=do_hsm_provision)
 
     # ---- Certificates
     # certs = sub.add_parser("certs", help="Certificate management")
