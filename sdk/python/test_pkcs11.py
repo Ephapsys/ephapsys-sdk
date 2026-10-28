@@ -508,3 +508,147 @@ def test_ecm_apply_fails_closed_when_required():
     with pytest.raises(agent_mod.SecureInferenceError, match="ECM target"):
         agent_mod.TrustedAgent._apply_ecm_if_available(stub, object(), runtime)
     agent_mod.TrustedAgent._apply_ecm_if_available(stub, object(), {"kind": "language"})          # legacy path: warn only
+
+
+# ---------------------------------------------------------------------------
+# hsm provision (pkcs11_provision): each test initialises SoftHSM's free slot under its own label
+# ---------------------------------------------------------------------------
+from ephapsys.crypto import pkcs11_provision as prov_mod  # noqa: E402
+
+
+def _pcfg(label, pin_file, sign="ephapsys-sign", kem="ephapsys-kem"):
+    return p11.Pkcs11Config(module=SOFTHSM_LIB, token_label=label, pin_file=str(pin_file),
+                            sign_key_label=sign, kem_key_label=kem)
+
+
+def test_provision_fresh_then_idempotent(token_env, tmp_path):
+    import grp
+    import stat
+    pin_file = tmp_path / "etc" / "pkcs11.pin"
+    group = grp.getgrgid(os.getgid()).gr_name
+    first = prov_mod.provision(_pcfg("prov-fresh", pin_file), pin_group=group)
+    assert first["status"] == "provisioned"
+    assert first["actions"] == ["created PIN file", f"initialised token 'prov-fresh' in slot {first['actions'][1].rsplit(' ', 1)[1]}",
+                                "set the user PIN", "discarded the SO PIN",
+                                "created sign key 'ephapsys-sign'", "created kem key 'ephapsys-kem'"]
+    assert stat.S_IMODE(pin_file.stat().st_mode) == 0o440 and pin_file.stat().st_gid == os.getgid()
+    assert not pin_file.read_text().endswith("\n") and len(pin_file.read_text()) == 32
+    assert not os.path.exists(str(pin_file) + prov_mod.SO_PENDING_SUFFIX)
+    again = prov_mod.provision(_pcfg("prov-fresh", pin_file), pin_group=group)
+    assert again["status"] == "already_provisioned" and again["actions"] == []
+    assert (again["sign"], again["kem"]) == (first["sign"], first["kem"])
+    # the runtime provider accepts what was provisioned
+    rt = p11.Pkcs11Provider(_pcfg("prov-fresh", pin_file))
+    assert spki_of(rt, "sign") == first["sign"]["spki_sha256"]
+
+
+def spki_of(prov, role):
+    return p11.spki_sha256_hex(prov.public_key_pem(role))
+
+
+def test_provision_default_pin_file_is_root_only(token_env, tmp_path):
+    import stat
+    pin_file = tmp_path / "pin"
+    prov_mod.provision(_pcfg("prov-0400", pin_file))
+    assert stat.S_IMODE(pin_file.stat().st_mode) == 0o400
+
+
+def test_provision_keeps_existing_token_and_keys(token_env, tmp_path):
+    pin_file = tmp_path / "pin"
+    pin_file.write_text(PIN)
+    before = provider(token_env)
+    report = prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
+    assert report["status"] == "already_provisioned"
+    assert report["sign"]["spki_sha256"] == spki_of(before, "sign")
+    assert report["kem"]["spki_sha256"] == spki_of(before, "kem")
+
+
+def test_provision_refuses_labelled_token_without_pin_file(token_env, tmp_path):
+    pin_file = tmp_path / "missing.pin"
+    with pytest.raises(p11.Pkcs11Error, match="manual repair"):
+        prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
+    assert not pin_file.exists()                                                              # nothing written
+
+
+def test_provision_wrong_pin_stops(token_env, tmp_path):
+    pin_file = tmp_path / "pin"
+    prov_mod.provision(_pcfg("prov-wrongpin", pin_file))
+    good = pin_file.read_text()
+    pin_file.chmod(0o600)
+    pin_file.write_text("0" * 32)
+    with pytest.raises(p11.Pkcs11Error, match="incorrect"):
+        prov_mod.provision(_pcfg("prov-wrongpin", pin_file))
+    pin_file.write_text(good)                                                                 # the file is never rewritten by provision
+    assert prov_mod.provision(_pcfg("prov-wrongpin", pin_file))["status"] == "already_provisioned"
+
+
+def test_provision_reuses_existing_pin_file_for_new_token(token_env, tmp_path):
+    pin_file = tmp_path / "pin"
+    pin_file.write_text("c0ffee" * 4)
+    report = prov_mod.provision(_pcfg("prov-reuse", pin_file))
+    assert report["actions"][0] == "reused existing PIN file"
+    assert pin_file.read_text() == "c0ffee" * 4
+    lib = pkcs11.lib(SOFTHSM_LIB)
+    with lib.get_token(token_label="prov-reuse").open(user_pin="c0ffee" * 4):
+        pass
+
+
+def test_provision_resumes_after_interrupted_init(token_env, tmp_path):
+    """Token initialised but the user PIN never set: the pending SO PIN finishes the job, then is discarded."""
+    pin_file = tmp_path / "pin"
+    pin_file.write_text("ab" * 16)
+    so_pending = str(pin_file) + prov_mod.SO_PENDING_SUFFIX
+    pathlib_so = tmp_path / ("pin" + prov_mod.SO_PENDING_SUFFIX)
+    pathlib_so.write_text("cd" * 16)
+    lib = pkcs11.lib(SOFTHSM_LIB)
+    free = [s for s in lib.get_slots(token_present=True) if not (s.get_token().flags & pkcs11.TokenFlag.TOKEN_INITIALIZED)][0]
+    prov_mod._c_init_token(SOFTHSM_LIB, free.slot_id, "cd" * 16, "prov-resume")
+    report = prov_mod.provision(_pcfg("prov-resume", pin_file))
+    assert "set the user PIN" in report["actions"] and "discarded the SO PIN" in report["actions"]
+    assert not os.path.exists(so_pending)
+
+
+def test_provision_refuses_half_key_pair(token_env, tmp_path):
+    pin_file = tmp_path / "pin"
+    prov_mod.provision(_pcfg("prov-half", pin_file))
+    lib = pkcs11.lib(SOFTHSM_LIB)
+    with lib.get_token(token_label="prov-half").open(rw=True, user_pin=pin_file.read_text()) as s:
+        s.get_key(object_class=pkcs11.ObjectClass.PUBLIC_KEY, label="ephapsys-kem").destroy()
+    with pytest.raises(p11.Pkcs11Error, match="incomplete"):
+        prov_mod.provision(_pcfg("prov-half", pin_file))
+
+
+def test_provision_refuses_existing_key_with_bad_policy(token_env, tmp_path):
+    pin_file = tmp_path / "pin"
+    pin_file.write_text(PIN)
+    with pytest.raises(p11.Pkcs11Error, match="non-extractable"):
+        prov_mod.provision(_pcfg(TOKEN, pin_file, sign="extractable", kem="kem"))
+
+
+def test_provision_never_initialises_an_initialised_token(tmp_path):
+    """A module whose tokens are all initialised (e.g. a vendor token holding other keys) is left alone."""
+    import pkcs11 as P
+    tok = types.SimpleNamespace(label="ManufacturingKey", flags=P.TokenFlag.TOKEN_INITIALIZED | P.TokenFlag.USER_PIN_INITIALIZED)
+    slot = types.SimpleNamespace(get_token=lambda: tok, slot_id=0)
+    lib = types.SimpleNamespace(get_slots=lambda token_present=True: [slot])
+    called = []
+    orig = prov_mod._c_init_token
+    prov_mod._c_init_token = lambda *a: called.append(a)
+    try:
+        with pytest.raises(p11.Pkcs11Error, match="refusing to initialise"):
+            prov_mod.provision(_pcfg("ephapsys", tmp_path / "pin"), lib_factory=lambda m: lib)
+    finally:
+        prov_mod._c_init_token = orig
+    assert called == [] and not (tmp_path / "pin").exists()
+
+
+@pytest.mark.parametrize("over,needle", [
+    (dict(token_label=None, token_serial="x"), "PKCS11_TOKEN_LABEL"),
+    (dict(pin_file=None, pin="1234"), "PKCS11_PIN_FILE"),
+    (dict(sign_key_label=None, sign_key_id=b"\x01"), "by label"),
+])
+def test_provision_config_requirements(tmp_path, over, needle):
+    import dataclasses
+    cfg = dataclasses.replace(_pcfg("x", tmp_path / "pin"), **over)
+    with pytest.raises(p11.Pkcs11Error, match=needle):
+        prov_mod.provision(cfg)
