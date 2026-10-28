@@ -18,8 +18,8 @@ again on a device that is already provisioned (it then changes nothing):
      sensitive and non-extractable, selected by PKCS11_SIGN_KEY_LABEL / PKCS11_KEM_KEY_LABEL, only if they
      are absent. Existing keys are never replaced; they are checked with the same policy as at runtime.
 
-Runs are serialised by an exclusive lock next to the PIN file, and every input that can be checked without
-touching the token (configuration, group, directory, existing secret files, PIN format, slot choice) is
+Runs are serialised by exclusive locks on the PKCS#11 module and on the PIN directory, and every input that
+can be checked without touching the token (configuration, group, directory, existing secret files, PIN format, slot choice) is
 checked before the first write. Secret files must be regular files (no symlinks) owned by the invoking user,
 in a directory owned by that user or root and not writable by group or others. Anything inconsistent (a
 labelled token without a PIN file, a locked PIN, half a key pair, missing mechanisms) is refused with an
@@ -29,6 +29,7 @@ reports as locked or on its final try.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import secrets
@@ -39,7 +40,8 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from .pkcs11 import Pkcs11Config, Pkcs11Error, Pkcs11Provider, _import_pkcs11, spki_sha256_hex
 
 SO_PENDING_SUFFIX = ".so-pending"
-LOCK_SUFFIX = ".lock"
+DIR_LOCK_NAME = ".ephapsys-pkcs11.lock"            # serialises every run writing into a PIN directory
+MODULE_LOCK_DIRS = ("/run/lock", "/var/lock")      # then the temp dir; serialises every run on one module
 TMP_PREFIX = ".ephapsys-provision-"
 MIN_PIN_LEN, MAX_PIN_LEN = 4, 64                         # within the bounds of common tokens (OP-TEE, SoftHSM)
 
@@ -143,7 +145,8 @@ def _discard(path: str) -> None:
 
 
 def _cleanup_orphans(d: str) -> None:
-    """Remove temporary files left by an interrupted run (only regular files this user owns)."""
+    """Remove temporary files left by an interrupted run (only regular files this user owns). Called with the
+    directory lock held: every writer of these files holds it, so none of them can belong to a live run."""
     for name in os.listdir(d):
         if name.startswith(TMP_PREFIX):
             p = os.path.join(d, name)
@@ -152,15 +155,28 @@ def _cleanup_orphans(d: str) -> None:
                 os.unlink(p)
 
 
+def _module_lock_path(module: str) -> str:
+    """One lock file per PKCS#11 module (by canonical path), independent of the PIN file location."""
+    name = "ephapsys-pkcs11-" + hashlib.sha256(os.path.realpath(module).encode()).hexdigest()[:16] + ".lock"
+    for d in MODULE_LOCK_DIRS + (tempfile.gettempdir(),):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return os.path.join(d, name)
+    raise Pkcs11Error("no writable lock directory for the module lock")
+
+
 class _Lock:
-    """Exclusive, non-blocking lock serialising provisioning runs that share a PIN file."""
+    """Exclusive, non-blocking flock. A run takes the module lock, then the PIN directory lock, and holds both
+    from discovery through final validation; a concurrent run fails immediately instead of waiting."""
 
     def __init__(self, path: str):
         self.path, self.fd = path, -1
 
     def __enter__(self):
         import fcntl                                     # POSIX only, like the PIN file ownership model
-        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        except PermissionError:                          # created by another user in a shared lock directory
+            self.fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
@@ -227,6 +243,26 @@ def _validate(cfg: Pkcs11Config, init_slot: InitSlot) -> None:
         raise Pkcs11Error("provisioning creates keys by label; set PKCS11_SIGN_KEY_LABEL and PKCS11_KEM_KEY_LABEL")
     if not (init_slot is None or init_slot == "first" or (isinstance(init_slot, int) and init_slot >= 0)):
         raise Pkcs11Error("init_slot must be None, 'first' or a slot id")
+
+
+def _load_pending(path: str, module: str, label: str) -> Optional[Dict[str, Any]]:
+    """Read and validate the SO PIN recovery record, if any, before anything may delete or replace it. A
+    record for another module or label belongs to an unfinished run on another token: refuse and keep it."""
+    if not os.path.lexists(path):
+        return None
+    try:
+        rec = json.loads(_read_checked(path, "SO PIN recovery file"))
+        ok = (isinstance(rec, dict) and rec.get("v") == 1 and isinstance(rec.get("module"), str)
+              and isinstance(rec.get("label"), str) and isinstance(rec.get("slot_id"), int)
+              and isinstance(rec.get("so_pin"), str) and rec["so_pin"])
+    except ValueError:
+        ok = False
+    if not ok:
+        raise Pkcs11Error(f"SO PIN recovery file {path} is malformed; it is kept for manual repair")
+    if rec["module"] != module or rec["label"] != label:
+        raise Pkcs11Error(f"SO PIN recovery file {path} belongs to an unfinished run for token "
+                          f"{rec['label']!r} on {rec['module']}; finish or repair that token first")
+    return rec
 
 
 def _tokens(lib) -> List[Any]:
@@ -327,7 +363,7 @@ def _provision(P, cfg: Pkcs11Config, pin_group: Optional[str], init_slot: InitSl
     _check_dir(pin_dir)
     actions: List[str] = []
 
-    with _Lock(pin_file + LOCK_SUFFIX):
+    with _Lock(_module_lock_path(cfg.module)), _Lock(os.path.join(pin_dir, DIR_LOCK_NAME)):
         _cleanup_orphans(pin_dir)
         try:
             lib = (lib_factory or P.lib)(cfg.module)
@@ -335,13 +371,14 @@ def _provision(P, cfg: Pkcs11Config, pin_group: Optional[str], init_slot: InitSl
             raise Pkcs11Error(f"cannot load PKCS#11 module {cfg.module!r}: {exc}") from exc
         pin_exists = os.path.lexists(pin_file)
         user_pin = _check_pin(_read_checked(pin_file, "PIN file", gid=gid), pin_file) if pin_exists else None
+        rec = _load_pending(so_pending, cfg.module, label)
 
         tok = _labelled(lib, label)
         if tok is None:
             # Preflight, no writes yet: PIN file (read above), slot choice, mechanisms.
             target = _pick_uninitialised(P, lib, init_slot, cfg.module)
             _require_mechanisms(P, target.slot)
-            if os.path.lexists(so_pending):              # no labelled token: C_InitToken never succeeded
+            if rec is not None:                          # its label is absent: C_InitToken never succeeded
                 _discard(so_pending)
             if user_pin is None:
                 user_pin = secrets.token_hex(16)
@@ -351,8 +388,8 @@ def _provision(P, cfg: Pkcs11Config, pin_group: Optional[str], init_slot: InitSl
                 actions.append("reused existing PIN file")
             so_pin = secrets.token_hex(16)
             slot_id = target.slot.slot_id
-            _create_exclusive(so_pending, json.dumps({"v": 1, "module": cfg.module, "label": label,
-                                                      "slot_id": slot_id, "so_pin": so_pin}), 0o400)
+            rec = {"v": 1, "module": cfg.module, "label": label, "slot_id": slot_id, "so_pin": so_pin}
+            _create_exclusive(so_pending, json.dumps(rec), 0o400)
             if _labelled(lib, label) is not None or any(
                     t.slot.slot_id == slot_id and t.flags & TF.TOKEN_INITIALIZED for t in _tokens(lib)):
                 raise Pkcs11Error(f"slot {slot_id} changed before initialisation; rerun provisioning")
@@ -366,23 +403,17 @@ def _provision(P, cfg: Pkcs11Config, pin_group: Optional[str], init_slot: InitSl
                               "(a new PIN file would not match the token)")
 
         if not (tok.flags & TF.USER_PIN_INITIALIZED):
-            if not os.path.lexists(so_pending):
+            if rec is None:
                 raise Pkcs11Error(f"token {label!r} has no user PIN and its SO PIN is not available; "
                                   "this needs a manual repair")
-            try:
-                rec = json.loads(_read_checked(so_pending, "SO PIN recovery file"))
-                so_pin = rec["so_pin"]
-            except (ValueError, KeyError, TypeError) as exc:
-                raise Pkcs11Error(f"SO PIN recovery file {so_pending} is malformed") from exc
-            if rec.get("module") != cfg.module or rec.get("label") != label:
-                raise Pkcs11Error(f"SO PIN recovery file {so_pending} belongs to another module or label")
+            so_pin = rec["so_pin"]
             if tok.flags & (TF.SO_PIN_LOCKED | TF.SO_PIN_FINAL_TRY):
                 raise Pkcs11Error(f"SO PIN of token {label!r} is locked or on its final try; not trying it")
             with tok.open(rw=True, so_pin=so_pin) as s:
                 s.init_pin(user_pin)
             actions.append("set the user PIN")
             tok = _labelled(lib, label)
-        if os.path.lexists(so_pending):
+        if rec is not None:                              # identity validated by _load_pending or written above
             _discard(so_pending)
             actions.append("discarded the SO PIN")
 

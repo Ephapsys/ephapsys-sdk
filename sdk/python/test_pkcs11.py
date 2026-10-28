@@ -626,7 +626,7 @@ def test_provision_refuses_recovery_record_for_another_label(token_env, tmp_path
     pin_file = _secret(tmp_path / "pin", "ab" * 16)
     _pending(pin_file, "cd" * 16, "some-other-token")
     _init_free_slot("prov-otherrec", "cd" * 16)
-    with pytest.raises(p11.Pkcs11Error, match="another module or label"):
+    with pytest.raises(p11.Pkcs11Error, match="unfinished run"):
         prov_mod.provision(_pcfg("prov-otherrec", pin_file))
 
 
@@ -720,17 +720,76 @@ def test_provision_removes_orphaned_temp_files(token_env, tmp_path):
     assert not orphan.exists()
 
 
-# ---- serialisation (finding 3) --------------------------------------------------------------------------
-def test_provision_refuses_while_another_run_holds_the_lock(token_env, tmp_path):
+# ---- serialisation (R227 finding 3, R228) -----------------------------------------------------------------
+def _hold(path):
     import fcntl
-    pin_file = _secret(tmp_path / "pin", PIN)
-    fd = os.open(str(pin_file) + prov_mod.LOCK_SUFFIX, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def test_provision_refuses_another_pin_path_in_the_same_directory(token_env, tmp_path):
+    """Run A holds the directory lock; run B with a different PIN file in that directory must not proceed
+    (so it cannot remove A's temporary files)."""
+    _secret(tmp_path / "pinB", PIN)
+    live_tmp = _secret(tmp_path / (prov_mod.TMP_PREFIX + "runA"), "in flight")
+    fd = _hold(tmp_path / prov_mod.DIR_LOCK_NAME)
+    try:
+        with pytest.raises(p11.Pkcs11Error, match="another provisioning run"):
+            prov_mod.provision(_pcfg(TOKEN, tmp_path / "pinB", sign="sign", kem="kem"))
+    finally:
+        os.close(fd)
+    assert live_tmp.exists()
+
+
+def test_provision_refuses_a_second_run_on_the_same_module(token_env, tmp_path):
+    (tmp_path / "a").mkdir(mode=0o700)
+    pin_file = _secret(tmp_path / "a" / "pin", PIN)
+    fd = _hold(prov_mod._module_lock_path(SOFTHSM_LIB))
     try:
         with pytest.raises(p11.Pkcs11Error, match="another provisioning run"):
             prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
     finally:
         os.close(fd)
+
+
+# ---- recovery record is validated before any delete or replace (R228) ----------------------------------
+def test_provision_keeps_other_tokens_recovery_record_when_label_absent(token_env, tmp_path):
+    pin_file = _secret(tmp_path / "pin", "ab" * 16)
+    rec = _pending(pin_file, "cd" * 16, "interrupted-token-A")
+    before_bytes, before_labels = rec.read_bytes(), _labels()
+    with pytest.raises(p11.Pkcs11Error, match="unfinished run for token 'interrupted-token-A'"):
+        prov_mod.provision(_pcfg("prov-label-B", pin_file))
+    assert rec.read_bytes() == before_bytes and _labels() == before_labels
+
+
+def test_provision_keeps_other_tokens_recovery_record_when_label_provisioned(token_env, tmp_path):
+    pin_file = _secret(tmp_path / "pin", PIN)
+    rec = _pending(pin_file, "cd" * 16, "interrupted-token-A")
+    before = rec.read_bytes()
+    with pytest.raises(p11.Pkcs11Error, match="unfinished run"):
+        prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
+    assert rec.read_bytes() == before
+
+
+def test_provision_keeps_recovery_record_for_another_module(token_env, tmp_path):
+    pin_file = _secret(tmp_path / "pin", PIN)
+    rec = _pending(pin_file, "cd" * 16, TOKEN, module="/usr/lib/other-module.so")
+    with pytest.raises(p11.Pkcs11Error, match="unfinished run"):
+        prov_mod.provision(_pcfg(TOKEN, pin_file, sign="sign", kem="kem"))
+    assert rec.exists()
+
+
+@pytest.mark.parametrize("body", ["not json", "[]", json.dumps({"v": 2, "module": "m", "label": "l", "slot_id": 0, "so_pin": "x"}),
+                                  json.dumps({"v": 1, "module": "m", "label": "l", "slot_id": "0", "so_pin": "x"}),
+                                  json.dumps({"v": 1, "module": "m", "label": "l", "slot_id": 0, "so_pin": ""})])
+def test_provision_keeps_malformed_recovery_record(token_env, tmp_path, body):
+    pin_file = _secret(tmp_path / "pin", PIN)
+    rec = _secret(tmp_path / ("pin" + prov_mod.SO_PENDING_SUFFIX), body, 0o400)
+    before_labels = _labels()
+    with pytest.raises(p11.Pkcs11Error, match="malformed"):
+        prov_mod.provision(_pcfg("prov-malformed", pin_file))
+    assert rec.read_text() == body and _labels() == before_labels
 
 
 # ---- slot choice and PIN flags, on a fake module (no SoftHSM state involved) -----------------------------
